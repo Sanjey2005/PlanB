@@ -1,0 +1,15 @@
+.env
+credentials.json
+token.json
+__pycache__/
+*.pyc
+.venv/
+venv/
+planb-lambda.zip
+*.zip
+sample_event_ids.txt
+add_sample_events.py
+remove_sample_events.py
+*.egg-info/
+.pytest_cache/
+.DS_Store

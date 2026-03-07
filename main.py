@@ -23,9 +23,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from google_auth_oauthlib.flow import Flow
 from mangum import Mangum
+from pydantic import BaseModel
 
 from graph import run_pipeline
 from utils.whatsapp import parse_incoming, verify_webhook
+from utils.validators import validate_phone, generate_oauth_state, verify_oauth_state, verify_meta_signature
+from config.settings import WHATSAPP_APP_SECRET, OAUTH_HMAC_SECRET
 from state import get_initial_state
 import uvicorn
 
@@ -37,6 +40,11 @@ _metrics: dict = {
     "last_run_ms": None,
     "agents_fired_last_run": [],
 }
+
+class ScheduledTriggerBody(BaseModel):
+    mode: str = "morning_briefing"
+    phone: str = ""
+
 
 app = FastAPI(
     title="PlanB",
@@ -98,7 +106,13 @@ async def webhook_receive(request: Request, background_tasks: BackgroundTasks):
     Meta does not retry the delivery.
     """
     try:
-        payload = await request.json()
+        body = await request.body()
+        sig = request.headers.get("X-Hub-Signature-256", "")
+        if WHATSAPP_APP_SECRET and not verify_meta_signature(body, sig, WHATSAPP_APP_SECRET):
+            print("[Webhook] Signature verification failed — ignoring request")
+            return {"status": "ok"}
+
+        payload = _json.loads(body)
         message = parse_incoming(payload)
         if message:
             background_tasks.add_task(_run_disruption_pipeline, message)
@@ -122,22 +136,24 @@ def _run_scheduled_pipeline(mode: str, phone: str):
 
 
 @app.post("/scheduled")
-async def scheduled_trigger(request: Request, background_tasks: BackgroundTasks):
+async def scheduled_trigger(body: ScheduledTriggerBody, background_tasks: BackgroundTasks):
     """Triggered by AWS EventBridge for morning briefings and evening reviews.
 
     Expects JSON body: {"mode": "morning_briefing" | "evening_review", "phone": "..."}
     Runs the pipeline in the background and returns immediately.
     """
-    mode = "unknown"
     try:
-        body = await request.json()
-        mode = body.get("mode", "morning_briefing")
-        phone = body.get("phone", "")
-        background_tasks.add_task(_run_scheduled_pipeline, mode, phone)
+        phone = body.phone
+        try:
+            validate_phone(phone)
+        except ValueError as e:
+            print(f"[Scheduled] Invalid phone rejected: {e}")
+            return {"status": "ok", "mode": body.mode}
+        background_tasks.add_task(_run_scheduled_pipeline, body.mode, phone)
     except Exception as e:
         print(f"[Scheduled] Error processing scheduled trigger: {e}")
 
-    return {"status": "ok", "mode": mode}
+    return {"status": "ok", "mode": body.mode}
 
 
 def _classify_event_type(event: dict) -> str:
@@ -446,13 +462,19 @@ def _oauth_redirect_uri() -> str:
 
 
 @app.get("/auth")
-async def start_auth(phone: str = Query(..., description="WhatsApp phone number e.g. 919876543210")):
+async def start_auth(phone: str = Query(..., description="WhatsApp phone number e.g. +919876543210")):
     """Initiate Google OAuth flow for a specific WhatsApp user.
 
     Redirects the user's browser to Google's consent screen.  The phone number
-    is passed as the OAuth *state* parameter so it survives the redirect and can
-    be retrieved in /auth/callback.
+    is signed with HMAC and passed as the OAuth *state* parameter so it survives
+    the redirect and can be verified in /auth/callback.
     """
+    try:
+        validate_phone(phone)
+    except ValueError:
+        return HTMLResponse("<h1>Invalid phone number</h1>", status_code=400)
+
+    state_token = generate_oauth_state(phone, OAUTH_HMAC_SECRET) if OAUTH_HMAC_SECRET else phone
     flow = Flow.from_client_secrets_file(
         _CREDENTIALS_PATH,
         scopes=_OAUTH_SCOPES,
@@ -461,7 +483,7 @@ async def start_auth(phone: str = Query(..., description="WhatsApp phone number 
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
-        state=phone,
+        state=state_token,
         prompt="consent",
     )
     return RedirectResponse(url=auth_url)
@@ -486,7 +508,11 @@ async def auth_callback(
     if not code or not state:
         return HTMLResponse("<h1>Missing parameters</h1>", status_code=400)
 
-    phone = state
+    try:
+        phone = verify_oauth_state(state, OAUTH_HMAC_SECRET) if OAUTH_HMAC_SECRET else state
+    except ValueError:
+        return HTMLResponse("<h1>Invalid OAuth state — possible CSRF attack</h1>", status_code=400)
+
     try:
         flow = Flow.from_client_secrets_file(
             _CREDENTIALS_PATH,

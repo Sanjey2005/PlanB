@@ -9,6 +9,7 @@ Score adjustment rule:
     capped at +30 total per task.
 
 Session caches avoid repeated S3 reads within the same Lambda invocation.
+Caches are keyed by (user_phone, task_name) to prevent cross-user leakage.
 """
 
 import json
@@ -21,9 +22,9 @@ from config.settings import AWS_REGION, S3_BUCKET_NAME
 
 load_dotenv()
 
-# Session caches — keyed by task name (event summary)
-_score_cache: dict = {}   # {task_name: score_adjustment}
-_stats_cache: dict = {}   # {task_name: {times_kept, times_dropped, user_overrides, total}}
+# Session caches — keyed by (user_phone, task_name)
+_score_cache: dict = {}   # {(user_phone, task_name): score_adjustment}
+_stats_cache: dict = {}   # {(user_phone, task_name): {times_kept, times_dropped, user_overrides, total}}
 
 _SCORE_CAP = 30
 _SCORE_PER_OVERRIDE = 5
@@ -54,14 +55,17 @@ def _load_logs_for_date(client, date_str: str) -> list:
     return logs
 
 
-def _load_all_logs(days: int) -> list:
-    """Load all pipeline logs from S3 for the last N days (not including today)."""
+def _load_all_logs(days: int, user_phone: str = "") -> list:
+    """Load pipeline logs from S3 for the last N days, filtered by user_phone if provided."""
     client = _get_s3_client()
     today = datetime.now().date()
     all_logs = []
     for i in range(1, days + 1):
         date_str = (today - timedelta(days=i)).strftime("%Y-%m-%d")
-        all_logs.extend(_load_logs_for_date(client, date_str))
+        logs = _load_logs_for_date(client, date_str)
+        if user_phone:
+            logs = [log for log in logs if log.get("user_phone") == user_phone]
+        all_logs.extend(logs)
     return all_logs
 
 
@@ -70,9 +74,6 @@ def _compute_stats(logs: list) -> dict:
 
     Returns:
         {task_name: {times_kept, times_dropped, user_overrides, total}}
-
-    user_overrides: log entries where routine_decisions said "drop" but the task
-    still appears in confirmed_schedule (scheduler/user overrode the drop).
     """
     stats: dict = {}
 
@@ -80,7 +81,6 @@ def _compute_stats(logs: list) -> dict:
         routine_decisions = log.get("routine_decisions") or {}
         confirmed_schedule = log.get("confirmed_schedule") or []
 
-        # Build set of task names that made it into the confirmed schedule
         confirmed_names = {
             entry.get("task_name", "")
             for entry in confirmed_schedule
@@ -105,47 +105,40 @@ def _compute_stats(logs: list) -> dict:
                 stats[task_name]["times_kept"] += 1
             elif decision == "dropped":
                 stats[task_name]["times_dropped"] += 1
-                # Override: routine said drop but task still appeared in confirmed schedule
                 if task_name in confirmed_names:
                     stats[task_name]["user_overrides"] += 1
 
     return stats
 
 
-def _ensure_cache_loaded():
-    """Populate _score_cache and _stats_cache if not already done this session."""
-    if _stats_cache:
-        return  # already loaded
+def _ensure_cache_loaded(user_phone: str = ""):
+    """Populate per-user caches if not already done this session."""
+    # Check if we have any cached data for this user
+    if any(k[0] == user_phone for k in _stats_cache):
+        return
     try:
-        logs = _load_all_logs(_DEFAULT_DAYS)
+        logs = _load_all_logs(_DEFAULT_DAYS, user_phone=user_phone)
         raw_stats = _compute_stats(logs)
         for task_name, s in raw_stats.items():
             overrides = s["user_overrides"]
             adjustment = min(_SCORE_CAP, overrides * _SCORE_PER_OVERRIDE)
-            _stats_cache[task_name] = s
-            _score_cache[task_name] = adjustment
+            _stats_cache[(user_phone, task_name)] = s
+            _score_cache[(user_phone, task_name)] = adjustment
     except Exception as e:
         print(f"[HabitLearner] Failed to load S3 logs: {e}")
 
 
-def get_learned_scores(task_names: list) -> dict:
+def get_learned_scores(task_names: list, user_phone: str = "") -> dict:
     """Return {task_name: score_adjustment} for the given list of task names.
 
     Adjustments are based on user override history from the last 30 days.
-    Results are cached in memory for the session.
-
-    Args:
-        task_names: List of event summary strings (calendar event names).
-
-    Returns:
-        Dict mapping each task name to an int score adjustment (0 to +30).
-        Tasks with no history return 0.
+    Results are cached per user in memory for the session.
     """
-    _ensure_cache_loaded()
-    return {name: _score_cache.get(name, 0) for name in task_names}
+    _ensure_cache_loaded(user_phone=user_phone)
+    return {name: _score_cache.get((user_phone, name), 0) for name in task_names}
 
 
-def get_all_habit_stats() -> dict:
+def get_all_habit_stats(user_phone: str = "") -> dict:
     """Return full habit stats for all tasks found in the last 30 days of logs.
 
     Used by the Comms Agent to respond to HABIT_STATS_REQUEST.
@@ -153,11 +146,12 @@ def get_all_habit_stats() -> dict:
     Returns:
         {task_name: {times_kept, times_dropped, user_overrides, total, score_boost}}
     """
-    _ensure_cache_loaded()
+    _ensure_cache_loaded(user_phone=user_phone)
     result = {}
-    for task_name, s in _stats_cache.items():
-        result[task_name] = {
-            **s,
-            "score_boost": _score_cache.get(task_name, 0),
-        }
+    for (phone, task_name), s in _stats_cache.items():
+        if phone == user_phone:
+            result[task_name] = {
+                **s,
+                "score_boost": _score_cache.get((user_phone, task_name), 0),
+            }
     return result

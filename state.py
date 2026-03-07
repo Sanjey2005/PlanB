@@ -76,6 +76,10 @@ class PlanBState(TypedDict, total=False):
     # Onboarding OAuth
     oauth_url: Optional[str]
 
+    # Time-awareness (injected at pipeline start)
+    current_time: Optional[str]   # ISO datetime at pipeline start e.g. "2026-03-07T18:00:00+05:30"
+    current_hour: Optional[int]   # 0-23 hour in IST
+
     # Final output
     whatsapp_message: Optional[str]
     pipeline_complete: Optional[bool]
@@ -117,6 +121,8 @@ def get_initial_state() -> dict:
         "lifestyle_actions": None,
         "user_dna": None,
         "oauth_url": None,
+        "current_time": None,
+        "current_hour": None,
         "whatsapp_message": None,
         "pipeline_complete": None,
         "user_phone": None,

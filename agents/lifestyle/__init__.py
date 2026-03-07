@@ -8,7 +8,7 @@ No external API calls are made. All output is deep links and search URLs that
 the user taps directly from WhatsApp.
 """
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from urllib.parse import quote
 
 from dotenv import load_dotenv
@@ -17,10 +17,7 @@ from state import PlanBState
 
 load_dotenv()
 
-# Re-import keyword lists to detect sub-intent from the raw message
-from agents.monitor import LATE_OFFICE_KEYWORDS, HUNGRY_KEYWORDS, CAB_KEYWORDS
-
-IST = timezone(timedelta(hours=5, minutes=30))
+from utils.keywords import LATE_OFFICE_KEYWORDS, HUNGRY_KEYWORDS, CAB_KEYWORDS, IST_OFFSET as IST
 
 # Evening routine keywords — events worth suggesting to reschedule when staying late
 _EVENING_ROUTINE_KW = ["gym", "workout", "exercise", "yoga", "run", "walk", "dinner"]

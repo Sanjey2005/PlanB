@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 
@@ -5,6 +7,7 @@ from config.settings import GROQ_MODEL_FAST, GROQ_API_KEY
 from state import PlanBState
 from utils.google_calendar import get_todays_events, get_events_range
 from utils.habit_learner import get_learned_scores
+from utils.llm_utils import parse_llm_json
 
 load_dotenv()
 
@@ -34,14 +37,13 @@ FATIGUE_MAP = {
 _classification_cache: dict = {}
 
 
-def _batch_classify_events(events: list, llm) -> dict:
+def _batch_classify_events(events: list, llm, user_phone: str = "") -> dict:
     """Return a dict mapping event summary -> task_type for all unclassified events.
 
     Only events without planb_task_type in extendedProperties are sent to Groq.
-    Results are read from and written back to _classification_cache.
+    Results are read from and written back to _classification_cache, keyed by
+    (user_phone, summary) to prevent cross-user leakage.
     """
-    import json
-
     to_classify = []
     for event in events:
         summary = event.get("summary", "Untitled event")
@@ -50,7 +52,7 @@ def _batch_classify_events(events: list, llm) -> dict:
         task_type = private.get("planb_task_type", "").strip().lower()
         if task_type in IMPORTANCE_MAP:
             continue  # already typed via extendedProperties
-        if summary not in _classification_cache:
+        if (user_phone, summary) not in _classification_cache:
             to_classify.append(summary)
 
     if to_classify:
@@ -64,23 +66,16 @@ def _batch_classify_events(events: list, llm) -> dict:
         )
         try:
             response = llm.invoke(prompt)
-            raw = response.content.strip()
-            # Strip markdown code fences if present
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            result = json.loads(raw)
+            result = parse_llm_json(response.content)
             for summary, task_type in result.items():
                 t = task_type.strip().lower()
                 if t in IMPORTANCE_MAP:
-                    _classification_cache[summary] = t
+                    _classification_cache[(user_phone, summary)] = t
         except Exception as e:
             print(f"Priority Engine: batch classification failed: {e}")
-            # Fall back: cache all as unknown so we don't retry this run
             for summary in to_classify:
-                if summary not in _classification_cache:
-                    _classification_cache[summary] = ""
+                if (user_phone, summary) not in _classification_cache:
+                    _classification_cache[(user_phone, summary)] = ""
 
     # Build final dict covering every event
     classifications = {}
@@ -92,13 +87,16 @@ def _batch_classify_events(events: list, llm) -> dict:
         if task_type in IMPORTANCE_MAP:
             classifications[summary] = task_type
         else:
-            classifications[summary] = _classification_cache.get(summary, "")
+            classifications[summary] = _classification_cache.get((user_phone, summary), "")
     return classifications
 
 
-def _get_deadline_proximity(event: dict) -> float:
-    """Return deadline_proximity score (0-1) based on how soon the event starts."""
-    from datetime import datetime, timezone
+def _get_deadline_proximity(event: dict, current_hour: int = 0) -> float:
+    """Return deadline_proximity score (0-1) based on how soon the event starts.
+
+    For same-day events, uses hour-level precision so past events score 0.
+    """
+    from datetime import datetime
     import re
 
     start_raw = event.get("start", "")
@@ -108,12 +106,25 @@ def _get_deadline_proximity(event: dict) -> float:
     try:
         # Normalise ISO 8601 offset (+05:30 → strip to naive for simple comparison)
         start_str = re.sub(r"[+-]\d{2}:\d{2}$", "", start_raw)
-        event_date = datetime.fromisoformat(start_str).date()
+        event_dt = datetime.fromisoformat(start_str)
+        event_date = event_dt.date()
         today = datetime.now().date()
         delta = (event_date - today).days
 
-        if delta <= 0:
-            return 1.0
+        if delta < 0:
+            # Event was on a past day
+            return 0.0
+        elif delta == 0:
+            # Same day — use hour precision
+            event_hour = event_dt.hour
+            if event_hour < current_hour:
+                return 0.0  # already past
+            elif event_hour - current_hour <= 2:
+                return 1.0  # imminent
+            elif event_hour - current_hour <= 6:
+                return 0.7  # later today
+            else:
+                return 0.5  # end of day
         elif delta == 1:
             return 0.75
         elif delta <= 7:
@@ -146,9 +157,9 @@ def _get_energy_cost(event: dict) -> float:
     return 0.5
 
 
-def _score_event(event: dict, fatigue_multiplier: float, classifications: dict) -> int:
+def _score_event(event: dict, fatigue_multiplier: float, classifications: dict, current_hour: int = 0) -> int:
     """Compute and return a clamped 0-100 priority score for a single event."""
-    deadline_proximity = _get_deadline_proximity(event)
+    deadline_proximity = _get_deadline_proximity(event, current_hour=current_hour)
     urgency = deadline_proximity                     # reinforce each other
     importance = _get_importance(event, classifications)
     goal_alignment = importance                      # reinforce each other
@@ -186,6 +197,7 @@ def priority_engine(state: PlanBState) -> PlanBState:
     try:
         fatigue_level = state.get("fatigue_level") or "none"
         fatigue_multiplier = FATIGUE_MAP.get(fatigue_level, 0.0)
+        current_hour = state.get("current_hour") or datetime.now().hour
 
         llm = ChatGroq(model=GROQ_MODEL_FAST, api_key=GROQ_API_KEY)
 
@@ -203,7 +215,7 @@ def priority_engine(state: PlanBState) -> PlanBState:
                 all_events.append(event)
 
         # Single batch Groq call for all unclassified events
-        classifications = _batch_classify_events(all_events, llm)
+        classifications = _batch_classify_events(all_events, llm, user_phone=state.get("user_phone") or "")
 
         task_scores = {}
         for event in all_events:
@@ -211,7 +223,7 @@ def priority_engine(state: PlanBState) -> PlanBState:
             if not eid:
                 continue
             try:
-                score = _score_event(event, fatigue_multiplier, classifications)
+                score = _score_event(event, fatigue_multiplier, classifications, current_hour=current_hour)
                 task_scores[eid] = score
             except Exception as e:
                 print(f"Priority Engine: failed to score event '{event.get('summary')}': {e}")
@@ -221,7 +233,7 @@ def priority_engine(state: PlanBState) -> PlanBState:
         try:
             summary_to_id = {e.get("summary", ""): e.get("id") for e in all_events if e.get("id")}
             all_summaries = list(summary_to_id.keys())
-            learned = get_learned_scores(all_summaries)
+            learned = get_learned_scores(all_summaries, user_phone=state.get("user_phone") or "")
             for summary, adj in learned.items():
                 if adj <= 0:
                     continue

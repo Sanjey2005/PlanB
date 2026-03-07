@@ -1,10 +1,9 @@
-import json
-
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 
 from config.settings import GROQ_MODEL_LARGE, GROQ_API_KEY
 from state import PlanBState
+from utils.llm_utils import parse_llm_json as _parse_llm_json
 
 load_dotenv()
 
@@ -46,17 +45,6 @@ SAFE_DEFAULTS = {
     "context_summary": "",
     "tasks_likely_affected": [],
 }
-
-
-def _parse_llm_json(content: str) -> dict:
-    """Parse JSON from LLM response, stripping markdown fences if present."""
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    return json.loads(text)
 
 
 def context_agent(state: PlanBState) -> PlanBState:

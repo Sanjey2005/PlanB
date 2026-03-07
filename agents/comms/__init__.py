@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
@@ -331,7 +332,7 @@ def _build_query_message(state: PlanBState) -> str:
         # Fallback: raw habit learner stats (single-run data)
         try:
             from utils.habit_learner import get_all_habit_stats
-            stats = get_all_habit_stats()
+            stats = get_all_habit_stats(user_phone=state.get("user_phone") or "")
             if not stats:
                 return "No habit data found yet. Keep using PlanB and your stats will appear here."
 
@@ -502,7 +503,7 @@ def _build_onboarding_message(state: PlanBState) -> str:
         import os
         base_url = os.getenv("API_GATEWAY_URL", "http://localhost:8000")
         user_phone = state.get("user_phone") or ""
-        oauth_url = f"{base_url}/auth?phone={user_phone}"
+        oauth_url = f"{base_url}/auth?phone={quote(user_phone)}"
     return (
         "👋 Welcome to PlanB!\n"
         "\n"
@@ -753,7 +754,7 @@ def _build_on_demand_message(state: PlanBState) -> str:
     if not confirmed:
         return "Your request has been processed. No schedule changes were needed."
 
-    from agents.replan import _validate_schedule_item
+    from utils.scheduling_rules import validate_schedule_item as _validate_schedule_item
     validated = []
     for t in confirmed:
         item = {

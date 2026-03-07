@@ -10,6 +10,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from config.settings import AWS_REGION, GOOGLE_CREDENTIALS_PATH, S3_BUCKET_NAME
+from utils.validators import sanitize_s3_key_segment
 
 load_dotenv()
 
@@ -46,9 +47,10 @@ def _save_user_token_to_s3(phone: str, token_data: dict) -> None:
     """Persist a refreshed or newly-issued OAuth token to S3 user_tokens/{phone}.json."""
     try:
         client = boto3.client("s3", region_name=AWS_REGION)
+        safe_phone = sanitize_s3_key_segment(phone)
         client.put_object(
             Bucket=S3_BUCKET_NAME,
-            Key=f"user_tokens/{phone}.json",
+            Key=f"user_tokens/{safe_phone}.json",
             Body=_json.dumps(token_data).encode("utf-8"),
             ContentType="application/json",
         )
@@ -67,9 +69,10 @@ def get_user_token(phone: str) -> dict | None:
         return None
     try:
         client = boto3.client("s3", region_name=AWS_REGION)
+        safe_phone = sanitize_s3_key_segment(phone)
         response = client.get_object(
             Bucket=S3_BUCKET_NAME,
-            Key=f"user_tokens/{phone}.json",
+            Key=f"user_tokens/{safe_phone}.json",
         )
         return _json.loads(response["Body"].read().decode("utf-8"))
     except Exception:

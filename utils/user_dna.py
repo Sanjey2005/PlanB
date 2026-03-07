@@ -15,6 +15,7 @@ import boto3
 from dotenv import load_dotenv
 
 from config.settings import AWS_REGION, S3_BUCKET_NAME
+from utils.validators import sanitize_s3_key_segment
 
 load_dotenv()
 
@@ -69,7 +70,8 @@ def get_user_dna(user_phone: str) -> dict:
 
     try:
         client = boto3.client("s3", region_name=AWS_REGION)
-        key = f"{_DNA_PREFIX}/{user_phone}.json"
+        safe_phone = sanitize_s3_key_segment(user_phone)
+        key = f"{_DNA_PREFIX}/{safe_phone}.json"
         response = client.get_object(Bucket=S3_BUCKET_NAME, Key=key)
         body = response["Body"].read().decode("utf-8")
         stored = json.loads(body)
@@ -109,7 +111,8 @@ def init_user_dna(user_phone: str) -> None:
     try:
         dna = get_user_dna(user_phone)
         client = boto3.client("s3", region_name=AWS_REGION)
-        key = f"{_DNA_PREFIX}/{user_phone}.json"
+        safe_phone = sanitize_s3_key_segment(user_phone)
+        key = f"{_DNA_PREFIX}/{safe_phone}.json"
         payload = json.dumps(dna, default=_json_serializer, indent=2)
         client.put_object(
             Bucket=S3_BUCKET_NAME,
@@ -183,7 +186,8 @@ def update_user_dna(user_phone: str, state: dict) -> None:
 
         # ── persist to S3 ────────────────────────────────────────────────────
         client = boto3.client("s3", region_name=AWS_REGION)
-        key = f"{_DNA_PREFIX}/{user_phone}.json"
+        safe_phone = sanitize_s3_key_segment(user_phone)
+        key = f"{_DNA_PREFIX}/{safe_phone}.json"
         payload = json.dumps(dna, default=_json_serializer, indent=2)
         client.put_object(
             Bucket=S3_BUCKET_NAME,

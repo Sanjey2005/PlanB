@@ -21,8 +21,7 @@ load_dotenv()
 from state import PlanBState
 from utils.s3_logger import get_last_pipeline_run
 from utils.google_calendar import update_event_time
-
-IST_OFFSET_STR = "+05:30"
+from utils.keywords import IST_OFFSET_STR
 
 
 def _compute_old_end(old_start: str, new_start: str, new_end: str) -> str:

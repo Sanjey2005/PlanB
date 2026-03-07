@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 
@@ -10,11 +10,9 @@ from utils.google_calendar import (
     update_event_time,
     get_free_slots,
 )
+from utils.keywords import IST_OFFSET, IST_OFFSET_STR
 
 load_dotenv()
-
-IST_OFFSET = timezone(timedelta(hours=5, minutes=30))
-IST_OFFSET_STR = "+05:30"
 
 
 def _parse_datetime(dt_str: str) -> datetime | None:
@@ -58,6 +56,36 @@ def _pick_slot(
         if slot["start"] not in claimed_slots:
             return slot
     return None
+
+
+def _pick_tomorrow_morning_slot(
+    date_str: str,
+    duration: int,
+    claimed_slots: set,
+    phone: str = None,
+) -> dict | None:
+    """Return the first free slot on date_str that starts between 7 AM and 10 AM.
+
+    Falls back to any available slot if no morning slot is found.
+    """
+    slots = get_free_slots(date_str, duration, phone=phone)
+    morning_slot = None
+    fallback_slot = None
+    for slot in slots:
+        if slot["start"] in claimed_slots:
+            continue
+        try:
+            slot_hour = datetime.fromisoformat(
+                slot["start"].split("+")[0].split("Z")[0]
+            ).hour
+        except Exception:
+            slot_hour = 12
+        if fallback_slot is None:
+            fallback_slot = slot
+        if 7 <= slot_hour < 10:
+            morning_slot = slot
+            break
+    return morning_slot or fallback_slot
 
 
 def _confidence(slot: dict | None, pushed_to_tomorrow: bool) -> int:
@@ -104,6 +132,7 @@ def scheduler_agent(state: PlanBState) -> PlanBState:
 
         task_scores = state.get("task_scores") or {}
         user_phone = state.get("user_phone")
+        current_hour = state.get("current_hour")
 
         # Build event lookup from today + next 2 days
         all_events = get_todays_events(phone=user_phone) + get_events_range(2, phone=user_phone)
@@ -141,15 +170,28 @@ def scheduler_agent(state: PlanBState) -> PlanBState:
 
             # Decide which date to try first
             suggested_dt = _parse_datetime(suggested_time)
-            if suggested_dt and suggested_dt.date() == today:
-                first_date, second_date = today_str, tomorrow_str
+            suggested_lower = (suggested_time or "").lower()
+
+            if "tomorrow" in suggested_lower:
+                first_date, second_date = tomorrow_str, None
+            elif suggested_dt and suggested_dt.date() > today:
+                first_date, second_date = tomorrow_str, None
+            elif current_hour is not None and current_hour >= 21:
+                # After 9 PM — no point finding today slots
+                first_date, second_date = tomorrow_str, None
             else:
                 first_date, second_date = today_str, tomorrow_str
 
-            # Find a slot
-            slot = _pick_slot(first_date, duration, claimed_slots, phone=user_phone)
-            pushed_to_tomorrow = False
-            if slot is None:
+            # Find a slot — use morning window for evening clear-schedule pushes
+            use_morning = (current_hour is not None and current_hour >= 18 and "tomorrow" in suggested_lower)
+
+            if use_morning:
+                slot = _pick_tomorrow_morning_slot(first_date, duration, claimed_slots, phone=user_phone)
+            else:
+                slot = _pick_slot(first_date, duration, claimed_slots, phone=user_phone)
+
+            pushed_to_tomorrow = first_date == tomorrow_str and slot is not None
+            if slot is None and second_date:
                 slot = _pick_slot(second_date, duration, claimed_slots, phone=user_phone)
                 pushed_to_tomorrow = slot is not None
 

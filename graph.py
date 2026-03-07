@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import uuid
+from datetime import datetime
 
 from langgraph.graph import StateGraph, END
 
@@ -40,6 +41,7 @@ from agents.onboarding import onboarding_agent
 from state import PlanBState, get_initial_state
 from utils.s3_logger import log_pipeline_run
 from utils.user_dna import get_user_dna, update_user_dna
+from utils.keywords import IST_OFFSET
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +198,11 @@ def run_pipeline(initial_state: dict) -> dict:
     run_id = str(uuid.uuid4())
     state = get_initial_state()
     state.update(initial_state)
+
+    # Inject current IST time so agents can distinguish past from future events
+    now_ist = datetime.now(tz=IST_OFFSET)
+    state["current_time"] = now_ist.isoformat()
+    state["current_hour"] = now_ist.hour
 
     # Load User DNA profile before the pipeline runs so agents can use it
     user_phone = state.get("user_phone") or ""

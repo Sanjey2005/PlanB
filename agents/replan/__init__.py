@@ -1,5 +1,3 @@
-import json
-import re
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -8,6 +6,8 @@ from langchain_groq import ChatGroq
 from config.settings import GROQ_MODEL_LARGE, GROQ_API_KEY
 from state import PlanBState
 from utils.google_calendar import get_todays_events
+from utils.llm_utils import parse_llm_json
+from utils.scheduling_rules import validate_schedule_item
 
 load_dotenv()
 
@@ -17,6 +17,8 @@ You are a scheduling assistant replanning a day after a disruption.
 Disruption summary: {context_summary}
 Severity: {severity}
 Hours lost today: {hours_impacted}
+Current wall-clock time (IST): {current_time}
+Current hour (24h): {current_hour}
 
 Today's schedule:
 LOCKED (cannot move):
@@ -45,6 +47,11 @@ Return ONLY valid JSON as a list:
   }}
 ]
 
+TIME-AWARENESS RULES — highest priority, override all other rules:
+- Any event whose start time is BEFORE {current_time} has already occurred. ALWAYS use action "keep" for these. Never suggest moving a past event.
+- If the user's request is about "clearing", "cancelling all", or "rescheduling rest of day": only move events that start AFTER {current_time}. Events before {current_time} are already done.
+- When moving an event to tomorrow, default suggested_time to "tomorrow 7:00 AM" unless a specific time fits better.
+
 Rules:
 - Never move LOCKED tasks
 - Always move BLOCKED tasks
@@ -52,7 +59,7 @@ Rules:
 - If hours_impacted >= 3, be aggressive about moving low-score tasks to tomorrow
 - If severity is low, prefer keeping most things and only moving truly blocked tasks
 
-STRICT SCHEDULING RULES — these override all other instructions. Never violate them:
+STRICT SCHEDULING RULES — these override all other instructions except time-awareness. Never violate them:
 - Breakfast tasks (any task with "breakfast" in the name): 6 AM – 10 AM only
 - Lunch tasks (any task with "lunch" in the name): 11 AM – 2 PM only
 - Dinner tasks (any task with "dinner" or "supper" in the name): 6 PM – 9 PM only
@@ -62,17 +69,6 @@ STRICT SCHEDULING RULES — these override all other instructions. Never violate
 - Never suggest a move of more than 3 hours from the original time unless the task is moving to tomorrow
 - If a task cannot be rescheduled to a logical time within these rules, use action "keep" and explain why\
 """
-
-
-def _parse_llm_json(content: str):
-    """Parse JSON from LLM response, stripping markdown fences if present."""
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    return json.loads(text)
 
 
 def _format_event_line(event: dict, score: int | None, tag: str) -> str:
@@ -104,168 +100,6 @@ def _build_fallback(events: list, blocked_summaries: set) -> list:
     return result
 
 
-_MEAL_WINDOWS = {
-    "breakfast": (6,  10),
-    "lunch":     (11, 14),
-    "dinner":    (18, 21),
-    "supper":    (18, 21),
-}
-_GYM_KEYWORDS   = ("gym", "workout", "exercise", "yoga", "run", "jog", "swim", "lift", "training", "crossfit")
-_SLEEP_KEYWORDS = ("sleep", "nap", "rest", "bed")
-_MEAL_GENERIC   = ("food", "eat", "meal", "snack")
-
-
-def _classify_task(task_name: str) -> str | None:
-    """Return a category string for hard-rule checking, or None if unconstrained."""
-    n = task_name.lower()
-    for kw in _MEAL_WINDOWS:
-        if kw in n:
-            return kw
-    for kw in _MEAL_GENERIC:
-        if kw in n:
-            return "meal_generic"
-    for kw in _GYM_KEYWORDS:
-        if kw in n:
-            return "gym"
-    for kw in _SLEEP_KEYWORDS:
-        if kw in n:
-            return "sleep"
-    return None
-
-
-def _parse_hour(suggested_time: str) -> int | None:
-    """Extract the hour (0–23) from an ISO string, clock string, or descriptive phrase."""
-    if not suggested_time:
-        return None
-
-    # ISO datetime
-    try:
-        return datetime.fromisoformat(suggested_time).hour
-    except (ValueError, TypeError):
-        pass
-
-    text = suggested_time.strip()
-
-    # "8:30 AM", "14:00", "8AM", "8 am"
-    m = re.search(r"(\d{1,2}):(\d{2})\s*(am|pm)?", text, re.IGNORECASE)
-    if m:
-        hour = int(m.group(1))
-        ampm = (m.group(3) or "").lower()
-        if ampm == "pm" and hour != 12:
-            hour += 12
-        elif ampm == "am" and hour == 12:
-            hour = 0
-        return hour
-
-    m = re.search(r"(\d{1,2})\s*(am|pm)", text, re.IGNORECASE)
-    if m:
-        hour = int(m.group(1))
-        ampm = m.group(2).lower()
-        if ampm == "pm" and hour != 12:
-            hour += 12
-        elif ampm == "am" and hour == 12:
-            hour = 0
-        return hour
-
-    # Descriptive keywords → representative hour
-    tl = text.lower()
-    if "early morning" in tl:   return 6
-    if "morning"       in tl:   return 8
-    if "noon"          in tl or "midday" in tl: return 12
-    if "early afternoon" in tl: return 13
-    if "late afternoon" in tl:  return 16
-    if "afternoon"     in tl:   return 14
-    if "early evening" in tl:   return 17
-    if "evening"       in tl:   return 18
-    if "night"         in tl:   return 21
-
-    return None
-
-
-def _validate_schedule_item(item: dict) -> dict:
-    """Post-LLM validation: reject illogical time moves and override to 'keep'.
-
-    Checks the suggested_time against hard windows for meals, gym, and sleep.
-    Also enforces the 3-hour drift limit for same-day moves.
-    Returns a (possibly modified) copy of item.
-    """
-    if item.get("action") != "move":
-        return item
-
-    task_name      = item.get("task_name", "")
-    suggested_time = item.get("suggested_time", "")
-    old_time       = item.get("old_time", "")
-
-    category = _classify_task(task_name)
-    if category is None:
-        # No hard rules for this task; still check 3-hour drift on same-day moves
-        if "tomorrow" not in suggested_time.lower():
-            old_hour  = _parse_hour(old_time)
-            sugg_hour = _parse_hour(suggested_time)
-            if old_hour is not None and sugg_hour is not None:
-                if abs(sugg_hour - old_hour) > 3:
-                    item = dict(item)
-                    item["action"] = "keep"
-                    item["suggested_time"] = old_time
-                    item["reason"] = (
-                        f"Suggested move for '{task_name}' is more than 3 hours from original "
-                        f"({old_time} → {suggested_time}). Kept at original time to avoid disruption."
-                    )
-        return item
-
-    sugg_hour = _parse_hour(suggested_time)
-    if sugg_hour is None:
-        # Can't parse — trust the LLM if it used a plain word like "tomorrow"
-        return item
-
-    violation = False
-    reason    = ""
-
-    if category in _MEAL_WINDOWS:
-        lo, hi = _MEAL_WINDOWS[category]
-        if not (lo <= sugg_hour < hi):
-            violation = True
-            meal_name = category.capitalize()
-            reason = (
-                f"Cannot reschedule '{task_name}' to {suggested_time} — "
-                f"{meal_name} must be between {lo % 12 or lo}{'AM' if lo < 12 else 'PM'} "
-                f"and {hi % 12 or hi}{'AM' if hi < 12 else 'PM'}. Kept at original time."
-            )
-
-    elif category == "meal_generic":
-        if not (6 <= sugg_hour < 21):
-            violation = True
-            reason = (
-                f"Cannot reschedule '{task_name}' to {suggested_time} — "
-                f"meals must stay between 6 AM and 9 PM. Kept at original time."
-            )
-
-    elif category == "gym":
-        if not (6 <= sugg_hour < 22):
-            violation = True
-            reason = (
-                f"Cannot reschedule '{task_name}' to {suggested_time} — "
-                f"gym/workout must be between 6 AM and 10 PM. Kept at original time."
-            )
-
-    elif category == "sleep":
-        if 9 <= sugg_hour < 21:
-            violation = True
-            reason = (
-                f"Cannot reschedule '{task_name}' to {suggested_time} — "
-                f"sleep/rest cannot be moved to daytime hours. Kept at original time."
-            )
-
-    if violation:
-        item = dict(item)
-        item["action"]         = "keep"
-        item["suggested_time"] = old_time
-        item["reason"]         = reason
-        print(f"Replan Agent [validation]: {reason}")
-
-    return item
-
-
 def replan_agent(state: PlanBState) -> PlanBState:
     """Replan Agent — decides WHAT moves, not WHERE.
 
@@ -294,6 +128,8 @@ def replan_agent(state: PlanBState) -> PlanBState:
         hours_impacted = state.get("hours_impacted") or 0.0
         context_summary = state.get("context_summary") or state.get("disruption_raw") or "Unknown disruption."
         severity = state.get("severity") or "low"
+        current_time = state.get("current_time") or ""
+        current_hour = state.get("current_hour")
 
         events = get_todays_events(phone=state.get("user_phone"))
         if not events:
@@ -301,6 +137,27 @@ def replan_agent(state: PlanBState) -> PlanBState:
             return state
 
         directly_blocked = set(cascade_map.get("directly_blocked", []))
+
+        # Build set of past event IDs — events that started before current_time are already done
+        past_event_ids: set = set()
+        if current_time:
+            try:
+                now_dt = datetime.fromisoformat(current_time)
+                for event in events:
+                    start_raw = event.get("start", "")
+                    if start_raw:
+                        try:
+                            import re as _re
+                            start_normalised = _re.sub(r"[+-]\d{2}:\d{2}$", "", start_raw)
+                            event_dt = datetime.fromisoformat(start_normalised)
+                            # Strip timezone from now_dt for naive comparison
+                            now_naive = now_dt.replace(tzinfo=None)
+                            if event_dt < now_naive:
+                                past_event_ids.add(event.get("id", ""))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
         # Categorise events
         immovable = []
@@ -312,6 +169,11 @@ def replan_agent(state: PlanBState) -> PlanBState:
             summary = event.get("summary", "")
             score = task_scores.get(eid)
             attendees = event.get("attendees", [])
+
+            # Past events are always immovable — they already happened
+            if eid in past_event_ids:
+                immovable.append((event, score))
+                continue
 
             if summary in directly_blocked:
                 blocked.append((event, score))
@@ -339,6 +201,8 @@ def replan_agent(state: PlanBState) -> PlanBState:
             context_summary=context_summary,
             severity=severity,
             hours_impacted=hours_impacted,
+            current_time=current_time or "unknown",
+            current_hour=current_hour if current_hour is not None else 0,
             immovable_list=immovable_list,
             moveable_list=moveable_list,
             blocked_list=blocked_list,
@@ -347,10 +211,10 @@ def replan_agent(state: PlanBState) -> PlanBState:
         response = llm.invoke(prompt)
 
         try:
-            proposed = _parse_llm_json(response.content)
+            proposed = parse_llm_json(response.content)
             if not isinstance(proposed, list):
                 raise ValueError("Expected a JSON list")
-        except (json.JSONDecodeError, IndexError, ValueError) as e:
+        except (Exception) as e:
             print(f"Replan Agent: failed to parse Groq JSON, using fallback: {e}")
             proposed = _build_fallback(events, directly_blocked)
 
@@ -362,7 +226,7 @@ def replan_agent(state: PlanBState) -> PlanBState:
                 item["task_id"] = summary_to_id[task_name]
 
         # Validate each move against hard scheduling rules before committing
-        proposed = [_validate_schedule_item(item) for item in proposed]
+        proposed = [validate_schedule_item(item) for item in proposed]
 
         state["proposed_schedule"] = proposed
         return state

@@ -7,51 +7,15 @@ from state import PlanBState
 from utils.gmail_reader import get_recent_emails, understand_email_with_gemini
 from utils.google_calendar import get_todays_events, get_events_range
 from utils.user_dna import is_new_user
+from utils.keywords import (
+    CALENDAR_CONNECT_KEYWORDS, STRESS_KEYWORDS, CRISIS_KEYWORDS,
+    DISRUPTION_KEYWORDS, QUERY_KEYWORDS, HABIT_STATS_KEYWORDS,
+    BUFFER_KEYWORDS, UNDO_KEYWORDS, LATE_OFFICE_KEYWORDS,
+    HUNGRY_KEYWORDS, CAB_KEYWORDS, SCHEDULE_REQUEST_VERBS,
+    SCHEDULABLE_ITEMS, CLEAR_SCHEDULE_KEYWORDS,
+)
 
 load_dotenv()
-
-CALENDAR_CONNECT_KEYWORDS = ["connect calendar", "link calendar", "connect google calendar"]
-STRESS_KEYWORDS = [
-    "overwhelmed", "i'm overwhelmed", "stressed", "i'm stressed",
-    "burned out", "burnt out", "anxious", "too much", "can't cope", "exhausted mentally",
-]
-CRISIS_KEYWORDS = [
-    "crisis mode", "panic", "emergency", "i'm sick", "deadline emergency",
-]
-DISRUPTION_KEYWORDS = [
-    "delayed", "cancelled", "sick", "headache", "tired", "meeting",
-    "rescheduled", "emergency", "traffic", "flight", "late", "cancel",
-    "postpone", "unwell", "exhausted", "overran", "ran over",
-    "date", "girlfriend", "boyfriend", "gf", "bf", "girl friend", "boy friend",
-    "plans with", "invited me",
-    "going out", "family dinner", "unexpected plans", "something came up",
-    "can't make it", "need to cancel", "have to leave",
-]
-QUERY_KEYWORDS = ["what", "show", "list", "when", "schedule"]
-HABIT_STATS_KEYWORDS = ["my stats", "show my habits"]
-BUFFER_KEYWORDS = ["buffer it", "add buffers"]
-UNDO_KEYWORDS = ["undo", "revert", "undo that", "put it back", "reverse that"]
-LATE_OFFICE_KEYWORDS = [
-    "staying late", "working late", "stuck in office", "late at office",
-    "cant leave", "still at work", "working overtime",
-]
-HUNGRY_KEYWORDS = [
-    "hungry", "starving", "need food", "order food", "what should i eat", "food",
-]
-CAB_KEYWORDS = [
-    "book cab", "need a ride", "going home", "leaving office",
-    "how do i get home", "book uber", "book ola",
-]
-SCHEDULE_REQUEST_VERBS = [
-    "schedule", "add", "book", "set up", "fit in", "squeeze in",
-    "make time", "wanna", "want to", "need to",
-    "pencil in", "slot in", "arrange",
-]
-SCHEDULABLE_ITEMS = [
-    "lunch", "dinner", "breakfast", "coffee", "meeting", "call",
-    "gym", "workout", "appointment", "session", "hangout",
-    "catch up", "drinks", "brunch", "date", "outing",
-]
 
 
 def monitor_agent(state: PlanBState) -> PlanBState:
@@ -114,6 +78,8 @@ def monitor_agent(state: PlanBState) -> PlanBState:
               and any(n in message for n in SCHEDULABLE_ITEMS)
               and not any(a in message for a in ("cancel", "postpone", "drop", "remove", "delete"))):
             state["mode"] = "on_demand"
+        elif any(kw in message for kw in CLEAR_SCHEDULE_KEYWORDS):
+            state["mode"] = "disruption"
         elif any(kw in message for kw in DISRUPTION_KEYWORDS):
             state["mode"] = "disruption"
         elif any(kw in message for kw in QUERY_KEYWORDS):

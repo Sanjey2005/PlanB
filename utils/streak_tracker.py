@@ -44,14 +44,13 @@ def _load_logs_for_date(client, date_str: str) -> list:
     return logs
 
 
-def get_streak(task_name: str) -> int:
+def get_streak(task_name: str, user_phone: str = "") -> int:
     """Return consecutive days (going back from yesterday) where task_name was kept.
 
     Scans up to the last 7 days of S3 logs. A day counts as "kept" if at least
     one pipeline run on that day recorded decision == "kept" for task_name.
     Stops counting as soon as a day is missing or has no "kept" entry.
-
-    Returns 0 if no logs found or the streak is immediately broken.
+    When user_phone is provided, only logs for that user are considered.
     """
     client = _get_s3_client()
     today = datetime.now().date()
@@ -62,6 +61,9 @@ def get_streak(task_name: str) -> int:
         logs = _load_logs_for_date(client, date_str)
         if not logs:
             break
+
+        if user_phone:
+            logs = [log for log in logs if log.get("user_phone") == user_phone]
 
         day_kept = any(
             log.get("routine_decisions", {}).get(task_name, {}).get("decision") == "kept"
@@ -75,12 +77,13 @@ def get_streak(task_name: str) -> int:
     return consecutive
 
 
-def get_drop_count_last_n_days(task_name: str, n: int) -> int:
+def get_drop_count_last_n_days(task_name: str, n: int, user_phone: str = "") -> int:
     """Return total number of log entries where task_name had decision == 'dropped'
     across all pipeline runs in the last N days (not including today).
 
     Each pipeline run is counted individually — if a task was dropped in two
     separate runs on the same day, that counts as 2.
+    When user_phone is provided, only logs for that user are considered.
     """
     client = _get_s3_client()
     today = datetime.now().date()
@@ -89,6 +92,8 @@ def get_drop_count_last_n_days(task_name: str, n: int) -> int:
     for i in range(1, n + 1):
         date_str = (today - timedelta(days=i)).strftime("%Y-%m-%d")
         logs = _load_logs_for_date(client, date_str)
+        if user_phone:
+            logs = [log for log in logs if log.get("user_phone") == user_phone]
         for log in logs:
             decision = log.get("routine_decisions", {}).get(task_name, {}).get("decision")
             if decision == "dropped":

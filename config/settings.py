@@ -20,6 +20,10 @@ SES_FROM_EMAIL = os.getenv("SES_FROM_EMAIL")
 # Google
 GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH")
 
+# Security
+WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "")
+OAUTH_HMAC_SECRET = os.getenv("OAUTH_HMAC_SECRET", "")
+
 # Model constants
 GROQ_MODEL_LARGE = "llama-3.3-70b-versatile"
 GROQ_MODEL_FAST = "llama-3.1-8b-instant"
@@ -42,3 +46,6 @@ def validate_config():
             f"Missing required environment variables: {', '.join(missing)}"
         )
     print("Config OK — all required environment variables loaded")
+
+
+validate_config()

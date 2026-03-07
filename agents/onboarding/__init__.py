@@ -1,4 +1,5 @@
 import os
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 
@@ -28,5 +29,5 @@ def onboarding_agent(state: PlanBState) -> PlanBState:
     init_user_dna(user_phone)
     state["is_new_user"] = True
     base_url = os.getenv("API_GATEWAY_URL", "http://localhost:8000")
-    state["oauth_url"] = f"{base_url}/auth?phone={user_phone}"
+    state["oauth_url"] = f"{base_url}/auth?phone={quote(user_phone)}"
     return state

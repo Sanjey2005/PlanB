@@ -111,7 +111,7 @@ def routine_agent(state: PlanBState) -> PlanBState:
             streak_protected = False
             drop_count = 0
             try:
-                drop_count = get_drop_count_last_n_days(summary, STREAK_DROP_WINDOW_DAYS)
+                drop_count = get_drop_count_last_n_days(summary, STREAK_DROP_WINDOW_DAYS, user_phone=state.get("user_phone") or "")
                 if drop_count >= STREAK_DROP_THRESHOLD:
                     score = min(100, score + STREAK_PROTECTION_BOOST)
                     streak_protected = True

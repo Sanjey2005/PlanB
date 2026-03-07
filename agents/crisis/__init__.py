@@ -26,7 +26,7 @@ DND_SUMMARY = "PlanB: CRISIS - Do Not Disturb"
 LOW_PRIORITY_THRESHOLD = 50
 
 
-def _create_dnd_block() -> dict:
+def _create_dnd_block(phone: str = None) -> dict:
     """Create a 3-hour DND calendar block starting now. Returns the created event or {}."""
     now = datetime.now()
     start = now.isoformat() + "+05:30"
@@ -36,6 +36,7 @@ def _create_dnd_block() -> dict:
         start=start,
         end=end,
         metadata={"planb_type": "crisis_dnd"},
+        phone=phone,
     )
 
 
@@ -80,7 +81,8 @@ def crisis_agent(state: PlanBState) -> PlanBState:
         crisis_actions = []
 
         # STEP 1 — Load today's events and split by priority threshold
-        events = get_todays_events()
+        user_phone = state.get("user_phone")
+        events = get_todays_events(phone=user_phone)
         kept_schedule = []
         dropped_events = []
 
@@ -109,7 +111,7 @@ def crisis_agent(state: PlanBState) -> PlanBState:
         print(f"[Crisis] Dropped {len(dropped_events)} low-priority tasks, kept {len(kept_schedule)}.")
 
         # STEP 2 — Create 3-hour DND calendar block
-        dnd_event = _create_dnd_block()
+        dnd_event = _create_dnd_block(phone=user_phone)
         if dnd_event.get("id"):
             crisis_actions.append({
                 "action": "calendar_block_created",

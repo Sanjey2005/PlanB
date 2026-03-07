@@ -47,12 +47,13 @@ def _pick_slot(
     date_str: str,
     duration: int,
     claimed_slots: set,
+    phone: str = None,
 ) -> dict | None:
     """Return first free slot on date_str that hasn't been claimed yet.
 
     claimed_slots is a set of start ISO strings already reserved this run.
     """
-    slots = get_free_slots(date_str, duration)
+    slots = get_free_slots(date_str, duration, phone=phone)
     for slot in slots:
         if slot["start"] not in claimed_slots:
             return slot
@@ -102,9 +103,10 @@ def scheduler_agent(state: PlanBState) -> PlanBState:
             return state
 
         task_scores = state.get("task_scores") or {}
+        user_phone = state.get("user_phone")
 
         # Build event lookup from today + next 2 days
-        all_events = get_todays_events() + get_events_range(2)
+        all_events = get_todays_events(phone=user_phone) + get_events_range(2, phone=user_phone)
         event_lookup = _build_event_lookup(all_events)
 
         today = datetime.now(tz=IST_OFFSET).date()
@@ -145,10 +147,10 @@ def scheduler_agent(state: PlanBState) -> PlanBState:
                 first_date, second_date = today_str, tomorrow_str
 
             # Find a slot
-            slot = _pick_slot(first_date, duration, claimed_slots)
+            slot = _pick_slot(first_date, duration, claimed_slots, phone=user_phone)
             pushed_to_tomorrow = False
             if slot is None:
-                slot = _pick_slot(second_date, duration, claimed_slots)
+                slot = _pick_slot(second_date, duration, claimed_slots, phone=user_phone)
                 pushed_to_tomorrow = slot is not None
 
             confidence = _confidence(slot, pushed_to_tomorrow)
@@ -160,7 +162,7 @@ def scheduler_agent(state: PlanBState) -> PlanBState:
 
                 # Write to Google Calendar
                 try:
-                    update_event_time(task_id, new_start, new_end)
+                    update_event_time(task_id, new_start, new_end, phone=user_phone)
                 except Exception as e:
                     print(f"Scheduler Agent: failed to update event '{task_name}': {e}")
                     confidence = 0

@@ -118,7 +118,7 @@ def resilience_agent(state: PlanBState) -> PlanBState:
         hours_impacted = state.get("hours_impacted") or 0.0
         context_summary = state.get("context_summary") or state.get("disruption_raw") or "Unknown disruption."
 
-        events = get_events_range(3)
+        events = get_events_range(3, phone=state.get("user_phone"))
         schedule_string = _build_schedule_string(events)
 
         llm = ChatGroq(model=GROQ_MODEL_LARGE, api_key=GROQ_API_KEY)

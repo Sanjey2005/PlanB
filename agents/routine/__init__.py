@@ -97,7 +97,7 @@ def routine_agent(state: PlanBState) -> PlanBState:
 
         llm = ChatGroq(model=GROQ_MODEL_FAST, api_key=GROQ_API_KEY)
 
-        today_events = get_todays_events()
+        today_events = get_todays_events(phone=state.get("user_phone"))
         routine_events = [e for e in today_events if _is_routine(e)]
 
         routine_decisions = {}

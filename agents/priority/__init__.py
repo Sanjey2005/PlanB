@@ -190,8 +190,9 @@ def priority_engine(state: PlanBState) -> PlanBState:
         llm = ChatGroq(model=GROQ_MODEL_FAST, api_key=GROQ_API_KEY)
 
         # Fetch and deduplicate events
-        today_events = get_todays_events()
-        range_events = get_events_range(2)
+        user_phone = state.get("user_phone")
+        today_events = get_todays_events(phone=user_phone)
+        range_events = get_events_range(2, phone=user_phone)
 
         seen_ids = set()
         all_events = []

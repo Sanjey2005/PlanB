@@ -295,7 +295,7 @@ def replan_agent(state: PlanBState) -> PlanBState:
         context_summary = state.get("context_summary") or state.get("disruption_raw") or "Unknown disruption."
         severity = state.get("severity") or "low"
 
-        events = get_todays_events()
+        events = get_todays_events(phone=state.get("user_phone"))
         if not events:
             state["proposed_schedule"] = []
             return state

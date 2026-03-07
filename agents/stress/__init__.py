@@ -40,7 +40,7 @@ def stress_agent(state: PlanBState) -> PlanBState:
         stress_actions = []
 
         # STEP 1 — Load today's events and split by priority threshold
-        events = get_todays_events()
+        events = get_todays_events(phone=state.get("user_phone"))
         kept_schedule = []
         lightened_events = []
 

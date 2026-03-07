@@ -124,7 +124,7 @@ def monitor_agent(state: PlanBState) -> PlanBState:
 
     # JOB 3 — Scheduled trigger (morning_briefing or evening_review)
     if source == "scheduled":
-        events = get_todays_events()
+        events = get_todays_events(phone=state.get("user_phone"))
         if events:
             lines = ["Today's schedule:"]
             for event in events:

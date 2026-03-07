@@ -107,6 +107,7 @@ def run_demo_pipeline() -> dict:
     ]
 
     agents_fired: list[str] = []
+    agent_latencies: dict[str, int] = {}
     final_state: dict = dict(initial_state)
     error_info: str | None = None
 
@@ -117,11 +118,15 @@ def run_demo_pipeline() -> dict:
             for p in patches:
                 stack.enter_context(p)
 
+            prev_chunk_ms = start_ms
             for chunk in graph_app.stream(initial_state):
+                now_ms = time.time() * 1000
                 for node_name, node_updates in chunk.items():
                     agents_fired.append(node_name)
                     if isinstance(node_updates, dict):
                         final_state.update(node_updates)
+                    agent_latencies[node_name] = int(now_ms - prev_chunk_ms)
+                    prev_chunk_ms = now_ms
 
     except Exception as exc:
         error_info = str(exc)
@@ -151,6 +156,7 @@ def run_demo_pipeline() -> dict:
         "confidence_scores": final_state.get("confidence_scores"),
         "routine_decisions": final_state.get("routine_decisions"),
         "emails_sent": final_state.get("emails_sent"),
+        "agent_latencies": agent_latencies,
     }
 
     result = {
@@ -158,6 +164,7 @@ def run_demo_pipeline() -> dict:
         "whatsapp_message": whatsapp_message,
         "decision_log": decision_log,
         "agents_fired": agents_fired,
+        "agent_latencies": agent_latencies,
         "pipeline_duration_ms": duration_ms,
     }
 

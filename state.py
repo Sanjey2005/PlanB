@@ -73,6 +73,9 @@ class PlanBState(TypedDict, total=False):
     # User DNA profile (loaded at pipeline start, persisted at end)
     user_dna: Optional[dict]
 
+    # Onboarding OAuth
+    oauth_url: Optional[str]
+
     # Final output
     whatsapp_message: Optional[str]
     pipeline_complete: Optional[bool]
@@ -113,6 +116,7 @@ def get_initial_state() -> dict:
         "undo_result": None,
         "lifestyle_actions": None,
         "user_dna": None,
+        "oauth_url": None,
         "whatsapp_message": None,
         "pipeline_complete": None,
         "user_phone": None,

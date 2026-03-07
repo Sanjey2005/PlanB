@@ -94,7 +94,7 @@ def undo_agent(state: PlanBState) -> PlanBState:
             old_end = _compute_old_end(old_start, new_start, new_start)
 
             try:
-                result = update_event_time(task_id, old_start, old_end)
+                result = update_event_time(task_id, old_start, old_end, phone=user_phone)
                 if result:
                     reverted.append({"task_name": task_name, "reverted_to": old_start})
                     print(f"[Undo] Reverted '{task_name}' to {old_start}")

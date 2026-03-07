@@ -46,7 +46,7 @@ def _scored_events_today(state: PlanBState, n: int = 3) -> list:
     """Return top-n (name, score) tuples from today's calendar, sorted by score desc."""
     try:
         from utils.google_calendar import get_todays_events
-        events = get_todays_events()
+        events = get_todays_events(phone=state.get("user_phone"))
         task_scores = state.get("task_scores") or {}
         scored = []
         for e in events:
@@ -65,7 +65,7 @@ def _tomorrows_top_events(state: PlanBState, n: int = 3) -> list:
     """Return top-n (name, score, time_str) tuples for tomorrow, sorted by score desc."""
     try:
         from utils.google_calendar import get_events_range
-        events = get_events_range(2)
+        events = get_events_range(2, phone=state.get("user_phone"))
         tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         task_scores = state.get("task_scores") or {}
         result = []
@@ -190,7 +190,7 @@ def _build_morning_briefing_message(state: PlanBState) -> str:
 
     # Your day at a glance — ALL events from real calendar, sorted by start time
     # Never filter by score: scores may be absent for query/briefing paths
-    events = get_todays_events()
+    events = get_todays_events(phone=state.get("user_phone"))
     task_scores = state.get("task_scores") or {}
     timed_events = []
     for e in events:
@@ -351,7 +351,7 @@ def _build_query_message(state: PlanBState) -> str:
 
     # All other queries — always fetch real calendar data, never let LLM invent events
     try:
-        events = get_todays_events()
+        events = get_todays_events(phone=state.get("user_phone"))
     except Exception:
         events = []
 
@@ -496,21 +496,22 @@ _SCHEDULE_QUERY_PHRASES = [
     "morning look", "day look", "week look", "remind me"
 ]
 
-_WELCOME_MESSAGE = (
-    "👋 Hey! I'm PlanB — your AI life operating system.\n"
-    "\n"
-    "I run in the background and fix your day when things go wrong.\n"
-    "Just tell me disruptions and I'll handle the rest.\n"
-    "\n"
-    "To get started I need access to your Google Calendar.\n"
-    "Send 'connect calendar' to link yours.\n"
-    "\n"
-    "Or just start texting me disruptions — I'll figure it out 🙂"
-)
-
-
 def _build_onboarding_message(state: PlanBState) -> str:
-    return _WELCOME_MESSAGE
+    oauth_url = state.get("oauth_url") or ""
+    if not oauth_url:
+        import os
+        base_url = os.getenv("API_GATEWAY_URL", "http://localhost:8000")
+        user_phone = state.get("user_phone") or ""
+        oauth_url = f"{base_url}/auth?phone={user_phone}"
+    return (
+        "👋 Welcome to PlanB!\n"
+        "\n"
+        "I'm your AI scheduling assistant. When your day breaks, I fix it.\n"
+        "\n"
+        f"Tap here to connect your Google Calendar:\n{oauth_url}\n"
+        "\n"
+        "Takes 30 seconds. Then just text me what's disrupting your day."
+    )
 
 
 def _format_events_as_day(events: list) -> str:
@@ -675,11 +676,12 @@ def _handle_schedule_request(state: PlanBState, raw_lower: str) -> str:
                 break
 
     # Step 2 — Find free slots for today
+    phone = state.get("user_phone")
     today_str = datetime.now().strftime("%Y-%m-%d")
-    free_slots = get_free_slots(today_str, duration)
+    free_slots = get_free_slots(today_str, duration, phone=phone)
 
     if not free_slots:
-        real_events = get_todays_events()
+        real_events = get_todays_events(phone=phone)
         lines = [f"Can't fit '{event_name}' ({duration} min) into today — no free slots left."]
         lines.append("")
         if real_events:
@@ -694,7 +696,7 @@ def _handle_schedule_request(state: PlanBState, raw_lower: str) -> str:
     best_slot = _pick_best_slot(free_slots, preferred_time)
 
     # Step 4 — Create the event on Google Calendar
-    result = create_event(event_name, best_slot["start"], best_slot["end"])
+    result = create_event(event_name, best_slot["start"], best_slot["end"], phone=phone)
     if not result:
         return f"Found a slot for '{event_name}' but couldn't create the event. Please try again."
 
@@ -705,7 +707,7 @@ def _handle_schedule_request(state: PlanBState, raw_lower: str) -> str:
     lines = [f"Done! '{event_name}' is now on your calendar: {start_fmt} to {end_fmt}."]
     lines.append("")
 
-    updated = get_todays_events()
+    updated = get_todays_events(phone=phone)
     if updated:
         lines.append("Your updated day:")
         for e in updated:
@@ -738,7 +740,7 @@ def _build_on_demand_message(state: PlanBState) -> str:
         return _handle_schedule_request(state, raw_lower)
 
     # Guard — always read real calendar first; LLM must never generate the event list
-    real_events = get_todays_events()
+    real_events = get_todays_events(phone=state.get("user_phone"))
     if not real_events:
         return "Nothing on your calendar today. Add events and I'll help you manage them."
 

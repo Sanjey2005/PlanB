@@ -100,7 +100,7 @@ def _parse_risks_json(text: str) -> list:
     return []
 
 
-def _auto_fix_buffer(risk: dict) -> None:
+def _auto_fix_buffer(risk: dict, phone: str = None) -> None:
     """Insert a 30-minute recovery buffer on the affected date for a high-severity risk."""
     date_str = risk.get("date", "")
     if not date_str:
@@ -108,7 +108,7 @@ def _auto_fix_buffer(risk: dict) -> None:
 
     try:
         # Try to find a free slot on that date
-        free_slots = get_free_slots(date_str, 30)
+        free_slots = get_free_slots(date_str, 30, phone=phone)
 
         if free_slots:
             slot = free_slots[0]
@@ -127,6 +127,7 @@ def _auto_fix_buffer(risk: dict) -> None:
                 "planb_task_type": "routine",
                 "planb_priority_score": "30",
             },
+            phone=phone,
         )
         print(f"[Predictive Risk] Inserted buffer block on {date_str}")
 
@@ -158,7 +159,8 @@ def predictive_risk_agent(state: PlanBState) -> PlanBState:
             return state
 
         # Fetch next 7 days of events
-        events = get_events_range(7)
+        user_phone = state.get("user_phone")
+        events = get_events_range(7, phone=user_phone)
         if not events:
             state["predictive_risks"] = []
             return state
@@ -210,7 +212,7 @@ def predictive_risk_agent(state: PlanBState) -> PlanBState:
                 can_auto_fix = risk.get("auto_fix") is True or str(risk.get("auto_fix", "")).lower() == "true"
 
                 if is_high and can_auto_fix:
-                    _auto_fix_buffer(risk)
+                    _auto_fix_buffer(risk, phone=user_phone)
             except Exception as e:
                 print(f"[Predictive Risk] Error during auto-fix: {e}")
                 continue

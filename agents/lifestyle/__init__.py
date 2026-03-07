@@ -63,12 +63,12 @@ def _food_queries() -> list:
 
 # ── Evening event detector ─────────────────────────────────────────────────────
 
-def _evening_events_to_reschedule() -> list:
+def _evening_events_to_reschedule(phone: str = None) -> list:
     """Return summaries of future evening routine/personal events for today."""
     try:
         from utils.google_calendar import get_todays_events
         now = datetime.now(tz=IST)
-        events = get_todays_events()
+        events = get_todays_events(phone=phone)
         suggestions = []
         for event in events:
             start_str = event.get("start", "")
@@ -149,7 +149,7 @@ def lifestyle_agent(state: PlanBState) -> PlanBState:
 
         # ── Late-office: suggest rescheduling evening events ──────────────────
         if is_late:
-            events_to_move = _evening_events_to_reschedule()
+            events_to_move = _evening_events_to_reschedule(phone=state.get("user_phone"))
             if events_to_move:
                 lifestyle_actions.append({
                     "type": "reschedule_suggestion",

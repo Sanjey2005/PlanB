@@ -108,6 +108,10 @@
       0%,100% { opacity: 1; }
       50%      { opacity: .12; }
     }
+    @keyframes blinkPurple {
+      0%,100% { opacity: 1; }
+      50%      { opacity: .15; }
+    }
     @keyframes slideInTop {
       from { opacity: 0; transform: translateY(-14px); }
       to   { opacity: 1; transform: translateY(0); }
@@ -124,11 +128,30 @@
       0%,100% { box-shadow: 0 32px 64px rgba(0,0,0,.6), 0 0 30px rgba(37,211,102,0.1); }
       50%      { box-shadow: 0 32px 64px rgba(0,0,0,.6), 0 0 50px rgba(37,211,102,0.2); }
     }
+    @keyframes shimmer {
+      0%   { background-position: -400px 0; }
+      100% { background-position: 400px 0; }
+    }
+    @keyframes barGrow {
+      from { width: 0; }
+    }
 
     .pulse-amber { animation: pulseAmber 1s ease-in-out infinite; }
     .blink-red   { animation: blinkRed 1.1s ease-in-out infinite; }
+    .blink-purple { animation: blinkPurple 1.1s ease-in-out infinite; }
     .slide-in    { animation: slideInTop .32s ease-out forwards; }
     .fade-up     { animation: fadeUp .45s ease-out forwards; }
+
+    /* ─── Skeleton shimmer ───────────────────────────────────── */
+    .skeleton {
+      background: linear-gradient(90deg,
+        rgba(255,255,255,0.04) 0%,
+        rgba(255,255,255,0.09) 50%,
+        rgba(255,255,255,0.04) 100%);
+      background-size: 800px 100%;
+      animation: shimmer 1.6s infinite linear;
+      border-radius: 8px;
+    }
 
     /* ─── Gradient text ──────────────────────────────────────── */
     .grad-amber {
@@ -172,6 +195,26 @@
     }
     .btn-demo:active:not(:disabled) { transform: translateY(0); }
     .btn-demo:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; transform: none; }
+
+    .btn-live {
+      background: linear-gradient(135deg, #9B1C1C 0%, #DC2626 40%, #F43F5E 70%, #FDA4AF 100%);
+      background-size: 200% 200%;
+      border: none;
+      box-shadow: 0 4px 24px rgba(244,63,94,0.4), 0 0 0 1px rgba(244,63,94,0.25);
+      color: #fff;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      letter-spacing: .07em;
+      transition: all .25s ease;
+      cursor: pointer;
+    }
+    .btn-live:hover:not(:disabled) {
+      box-shadow: 0 8px 36px rgba(244,63,94,0.6), 0 0 0 1px rgba(244,63,94,0.4);
+      transform: translateY(-2px);
+      background-position: right center;
+    }
+    .btn-live:active:not(:disabled) { transform: translateY(0); }
+    .btn-live:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; transform: none; }
 
     .btn-reset {
       background: rgba(255,255,255,0.04);
@@ -237,7 +280,7 @@
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
 
-/* ─── API base URL ─────────────────────────────────────────────────────────
+/* ─── API base URL ──────────────────────────────────────────────────────────
    Override via ?api=http://your-server:8000 in the URL.                    */
 const API_BASE = new URLSearchParams(window.location.search).get('api')
   || 'http://localhost:8000';
@@ -280,8 +323,27 @@ function fmtDuration(ms) {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
 }
 function avg(arr) {
-  if (!arr.length) return null;
+  if (!arr || !arr.length) return null;
   return Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
+}
+
+/* ─── Event type → colour ──────────────────────────────────────────────── */
+const TYPE_COLOR = {
+  meeting: 'amber',
+  health:  'emerald',
+  meal:    'rose',
+  focus:   'indigo',
+  event:   'indigo',
+};
+
+function toCalEventProps(event, tag) {
+  return {
+    id:    event.id || String(Math.random()),
+    title: event.summary || '(No title)',
+    time:  `${fmtTime(event.start)} – ${fmtTime(event.end)}`,
+    color: TYPE_COLOR[event.type] || 'indigo',
+    tag,
+  };
 }
 
 /* ─── Badge colour palettes ────────────────────────────────────────────── */
@@ -379,6 +441,55 @@ function AgentCard({ agent, status }) {
   );
 }
 
+/* ── Latency bar chart ───────────────────────────────────────────────────── */
+function LatencyChart({ agentLatencies, totalMs }) {
+  if (!agentLatencies || Object.keys(agentLatencies).length === 0) return null;
+
+  const fired = AGENTS.filter(a => agentLatencies[a.id] != null);
+  const maxMs  = Math.max(...fired.map(a => agentLatencies[a.id]), 1);
+
+  return (
+    <div className="glass" style={{ padding: '14px 16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+        <span style={{ color: '#F59E0B', fontSize: '10px', fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', fontFamily: "'JetBrains Mono', monospace" }}>
+          Agent Latencies
+        </span>
+        <span style={{ color: '#FCD34D', fontSize: '12px', fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
+          {fmtDuration(totalMs)}
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+        {fired.map(a => {
+          const ms  = agentLatencies[a.id];
+          const pct = Math.max((ms / maxMs) * 100, 2);
+          const barColor = pct > 70
+            ? 'linear-gradient(90deg, #F43F5E, #FDA4AF)'
+            : pct > 35
+            ? 'linear-gradient(90deg, #F59E0B, #FCD34D)'
+            : 'linear-gradient(90deg, #10B981, #6EE7B7)';
+          return (
+            <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ width: '68px', fontSize: '9px', color: 'rgba(255,255,255,0.35)', fontFamily: "'JetBrains Mono', monospace", flexShrink: 0 }}>
+                {a.label}
+              </span>
+              <div style={{ flex: 1, height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', width: `${pct}%`, borderRadius: '3px',
+                  background: barColor,
+                  animation: 'barGrow 0.6s ease-out',
+                }} />
+              </div>
+              <span style={{ width: '40px', textAlign: 'right', fontSize: '9px', color: 'rgba(255,255,255,0.35)', fontFamily: "'JetBrains Mono', monospace", flexShrink: 0 }}>
+                {ms}ms
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /* ── Decision log row ────────────────────────────────────────────────────── */
 function LogRow({ entry }) {
   return (
@@ -424,12 +535,10 @@ function PhoneMockup({ message }) {
       padding: '12px',
       animation: 'phoneGlow 3s ease-in-out infinite',
     }}>
-      {/* Status bar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 8px 6px', opacity: .45 }}>
         <span style={{ color: '#9ca3af', fontSize: '10px', fontFamily: "'JetBrains Mono', monospace" }}>9:41</span>
         <span style={{ color: '#9ca3af', fontSize: '10px' }}>●●●</span>
       </div>
-      {/* WhatsApp header */}
       <div style={{ background: '#075E54', borderRadius: '12px 12px 0 0', padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '9px' }}>
         <div style={{
           width: '28px', height: '28px', borderRadius: '50%',
@@ -443,7 +552,6 @@ function PhoneMockup({ message }) {
           <div style={{ color: '#a7f3d0', fontSize: '9px', fontFamily: "'JetBrains Mono', monospace" }}>online</div>
         </div>
       </div>
-      {/* Chat area */}
       <div style={{ background: '#0d1a14', padding: '10px', borderRadius: '0 0 12px 12px' }}>
         <div style={{ background: '#1a2e20', borderRadius: '4px 12px 12px 12px', padding: '10px 12px' }}>
           <p style={{ color: '#e2e8f0', fontSize: '11px', lineHeight: '1.6', whiteSpace: 'pre-wrap', margin: 0, fontFamily: '-apple-system, sans-serif' }}>
@@ -454,14 +562,13 @@ function PhoneMockup({ message }) {
           </p>
         </div>
       </div>
-      {/* Home bar */}
       <div style={{ width: '42px', height: '3px', background: 'rgba(255,255,255,0.14)', borderRadius: '2px', margin: '10px auto 2px' }} />
     </div>
   );
 }
 
 /* ── Stats card ──────────────────────────────────────────────────────────── */
-function StatCard({ label, value, gradClass, icon }) {
+function StatCard({ label, value, gradClass, icon, loading }) {
   return (
     <div style={{
       flex: 1,
@@ -474,9 +581,13 @@ function StatCard({ label, value, gradClass, icon }) {
       textAlign: 'center',
     }}>
       {icon && <div style={{ fontSize: '20px', marginBottom: '8px' }}>{icon}</div>}
-      <div className={`grad-${gradClass}`} style={{ fontSize: '28px', fontWeight: 800, fontFamily: "'Outfit', sans-serif", lineHeight: 1.1 }}>
-        {value}
-      </div>
+      {loading ? (
+        <div className="skeleton" style={{ height: '32px', width: '60%', margin: '0 auto 8px' }} />
+      ) : (
+        <div className={`grad-${gradClass}`} style={{ fontSize: '28px', fontWeight: 800, fontFamily: "'Outfit', sans-serif", lineHeight: 1.1 }}>
+          {value}
+        </div>
+      )}
       <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.28)', marginTop: '7px', textTransform: 'uppercase', letterSpacing: '.12em', fontFamily: "'JetBrains Mono', monospace" }}>
         {label}
       </div>
@@ -513,33 +624,90 @@ function CalEvent({ title, time, color, tag }) {
   );
 }
 
+/* ── Calendar skeleton ───────────────────────────────────────────────────── */
+function CalSkeleton() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      {[1, 2, 3].map(i => (
+        <div key={i} className="skeleton" style={{ height: '52px', borderRadius: '10px' }} />
+      ))}
+    </div>
+  );
+}
+
+/* ── Calendar empty / error state ───────────────────────────────────────── */
+function CalEmpty({ msg }) {
+  return (
+    <div style={{
+      textAlign: 'center', padding: '18px 12px',
+      color: 'rgba(255,255,255,0.2)', fontSize: '11px',
+      fontFamily: "'JetBrains Mono', monospace",
+      border: '1px dashed rgba(255,255,255,0.08)',
+      borderRadius: '10px',
+    }}>
+      {msg}
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Main App
    ═══════════════════════════════════════════════════════════════════════════ */
 function App() {
-  const [statuses,    setStatuses]    = useState({ ...IDLE_STATE });
-  const [log,         setLog]         = useState([]);
-  const [isLive,      setIsLive]      = useState(false);
-  const [lastRunId,   setLastRunId]   = useState(null);
-  const [lastRunTs,   setLastRunTs]   = useState(null);
-  const [waMsg,       setWaMsg]       = useState('');
-  const [demoRunning, setDemoRunning] = useState(false);
-  const [statusLine,  setStatusLine]  = useState('Polling /status every 3 s — waiting for first run...');
-  const [stats,       setStats]       = useState({ runs: 0, avgConf: null, habits: 0, duration: null });
-  const [calEvents,   setCalEvents]   = useState([]);
+  const [statuses,      setStatuses]      = useState({ ...IDLE_STATE });
+  const [log,           setLog]           = useState([]);
+  const [isLive,        setIsLive]        = useState(false);
+  const [runMode,       setRunMode]       = useState(null);   // 'demo' | 'live'
+  const [lastRunId,     setLastRunId]     = useState(null);
+  const [lastRunTs,     setLastRunTs]     = useState(null);
+  const [waMsg,         setWaMsg]         = useState('');
+  const [demoRunning,   setDemoRunning]   = useState(false);
+  const [liveRunning,   setLiveRunning]   = useState(false);
+  const [statusLine,    setStatusLine]    = useState('Polling /status every 3 s — waiting for first run...');
+  const [agentLatencies, setAgentLatencies] = useState({});
+  const [totalDurationMs, setTotalDurationMs] = useState(null);
+
+  // Metrics from /metrics endpoint
+  const [metrics,     setMetrics]     = useState(null);   // null = loading
+  const [metricsErr,  setMetricsErr]  = useState(false);
+
+  // Calendar from /calendar endpoint
+  const [calToday,    setCalToday]    = useState(null);   // null = loading
+  const [calTomorrow, setCalTomorrow] = useState(null);
+  const [calError,    setCalError]    = useState(false);
+  const [calEvents,   setCalEvents]   = useState([]);     // from pipeline run results
 
   const logRef      = useRef(null);
   const timeoutsRef = useRef([]);
 
-  /* Auto-scroll log */
+  /* ── Auto-scroll log ──────────────────────────────────────────────────── */
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [log]);
 
-  /* Clear animation queue */
+  /* ── Fetch /calendar on load ──────────────────────────────────────────── */
+  useEffect(() => {
+    fetch(`${API_BASE}/calendar`, { signal: AbortSignal.timeout(10000) })
+      .then(r => r.json())
+      .then(data => {
+        setCalToday(data.today || []);
+        setCalTomorrow(data.tomorrow || []);
+      })
+      .catch(() => setCalError(true));
+  }, []);
+
+  /* ── Fetch /metrics on load ───────────────────────────────────────────── */
+  useEffect(() => {
+    fetch(`${API_BASE}/metrics`, { signal: AbortSignal.timeout(10000) })
+      .then(r => r.json())
+      .then(data => setMetrics(data))
+      .catch(() => setMetricsErr(true));
+  }, []);
+
+  /* ── Clear animation queue ────────────────────────────────────────────── */
   const clearAnim = () => { timeoutsRef.current.forEach(clearTimeout); timeoutsRef.current = []; };
 
-  /* Sequential agent animation */
+  /* ── Sequential agent animation ──────────────────────────────────────── */
   const animate = useCallback((names) => {
     clearAnim();
     setStatuses({ ...IDLE_STATE });
@@ -564,12 +732,17 @@ function App() {
              bg: pal?.bg, fg: pal?.fg, bd: pal?.bd };
   }
 
-  const logsFromDemo = useCallback((result) => {
-    const dl = result.decision_log || {};
+  const logsFromResult = useCallback((result, modeBadgePal) => {
+    const dl   = result.decision_log || {};
     const rows = [];
+    const DEMO_PAL = { bg:'rgba(124,58,237,0.14)', fg:'#c084fc', bd:'rgba(124,58,237,0.3)' };
+    const LIVE_PAL = { bg:'rgba(244,63,94,0.14)',  fg:'#fca5a5', bd:'rgba(244,63,94,0.3)'  };
 
-    rows.push(makeRow(`Disruption: "${dl.disruption || ''}"`, 'DEMO',
-      { bg:'rgba(124,58,237,0.14)', fg:'#c084fc', bd:'rgba(124,58,237,0.3)' }));
+    rows.push(makeRow(
+      `Disruption: "${dl.disruption || ''}"`,
+      modeBadgePal === 'live' ? 'LIVE' : 'DEMO',
+      modeBadgePal === 'live' ? LIVE_PAL : DEMO_PAL,
+    ));
 
     if (dl.severity)
       rows.push(makeRow(
@@ -586,7 +759,6 @@ function App() {
       rows.push(makeRow(`Delegation depth: ${dl.delegation_depth}`, dl.delegation_depth,
         { bg:'rgba(255,255,255,0.06)', fg:'rgba(255,255,255,0.45)', bd:'rgba(255,255,255,0.1)' }));
 
-    /* Confirmed schedule */
     const scheduleEvts = [];
     (dl.confirmed_schedule || []).forEach((item, i) => {
       const conf = (dl.confidence_scores || {})[item.task_name];
@@ -605,7 +777,6 @@ function App() {
     });
     if (scheduleEvts.length) setCalEvents(scheduleEvts);
 
-    /* Routine decisions + streak protection */
     Object.entries(dl.routine_decisions || {}).forEach(([name, d]) => {
       if (d.streak_protected) {
         rows.push(makeRow(
@@ -618,7 +789,6 @@ function App() {
       }
     });
 
-    /* Emails */
     const emails = dl.emails_sent || [];
     if (emails.length)
       rows.push(makeRow(
@@ -661,10 +831,12 @@ function App() {
   }, []);
 
   /* ── Poll /status ─────────────────────────────────────────────────────── */
+  const anyRunning = demoRunning || liveRunning;
+
   useEffect(() => {
     let alive = true;
     const poll = async () => {
-      if (!alive || demoRunning) return;
+      if (!alive || anyRunning) return;
       try {
         const r    = await fetch(`${API_BASE}/status`, { signal: AbortSignal.timeout(5000) });
         if (!r.ok) { setStatusLine('Server unreachable — retrying...'); return; }
@@ -677,52 +849,55 @@ function App() {
           setLastRunId(data.run_id);
           setLastRunTs(data.timestamp || now());
           setIsLive(true);
+          setRunMode('live');
           setStatusLine(`New run: ${data.run_id.slice(0, 8)}…`);
           const agents = (data.agents || []).filter(Boolean);
           animate(agents.length ? agents : ['monitor','context','resilience','priority','orchestrator','comms']);
           push(logsFromStatus(data));
-          setStats(p => ({ ...p, runs: p.runs + 1 }));
+          setMetrics(m => m ? { ...m, total_runs: (m.total_runs || 0) + 1 } : null);
         }
       } catch { /* server unreachable */ }
     };
     const iv = setInterval(poll, 3000);
     poll();
     return () => { alive = false; clearInterval(iv); };
-  }, [lastRunId, demoRunning, animate, push, logsFromStatus]);
+  }, [lastRunId, anyRunning, animate, push, logsFromStatus]);
+
+  /* ── Shared post-run handler ──────────────────────────────────────────── */
+  const handleRunResult = useCallback((result, mode) => {
+    const actual = (result.agents_fired || []).filter(Boolean);
+    setIsLive(true);
+    setRunMode(mode);
+    animate(actual.length ? actual : ['monitor','context','resilience','priority','orchestrator','replan','routine','scheduler','comms']);
+    setWaMsg(result.whatsapp_message || '');
+    push(logsFromResult(result, mode));
+    setAgentLatencies(result.agent_latencies || {});
+    setTotalDurationMs(result.pipeline_duration_ms || null);
+    setLastRunTs(now());
+    setStatusLine(`${mode === 'live' ? 'Live' : 'Demo'} run complete ✓`);
+    setMetrics(m => m
+      ? { ...m, total_runs: (m.total_runs || 0) + 1, last_run_ms: result.pipeline_duration_ms || m.last_run_ms }
+      : null
+    );
+  }, [animate, push, logsFromResult]);
 
   /* ── Trigger demo ─────────────────────────────────────────────────────── */
   const handleDemo = async () => {
-    if (demoRunning) return;
+    if (anyRunning) return;
     setDemoRunning(true);
     setIsLive(true);
+    setRunMode('demo');
     setWaMsg('');
+    setAgentLatencies({});
+    setTotalDurationMs(null);
     setStatusLine('⚡ Demo pipeline running…');
-
-    /* Optimistic animation while we wait for the server */
     animate(['monitor','context','resilience','priority','orchestrator','replan','routine','scheduler','comms']);
 
     try {
       const r      = await fetch(`${API_BASE}/demo`, { method: 'POST', signal: AbortSignal.timeout(120000) });
       const result = await r.json();
       if (result.status !== 'ok') throw new Error(result.error || 'non-ok status');
-
-      /* Re-animate with actual agents fired */
-      const actual = (result.agents_fired || []).filter(Boolean);
-      setIsLive(true);
-      animate(actual.length ? actual : ['monitor','context','resilience','priority','orchestrator','replan','routine','scheduler','comms']);
-
-      setWaMsg(result.whatsapp_message || '');
-      push(logsFromDemo(result));
-
-      /* Compute stats */
-      const dl     = result.decision_log || {};
-      const scores = Object.values(dl.confidence_scores || {}).filter(v => typeof v === 'number');
-      const habits = Object.values(dl.routine_decisions || {}).filter(d => d.streak_protected).length;
-
-      setStats(p => ({ ...p, runs: p.runs + 1, avgConf: avg(scores), habits: p.habits + habits, duration: result.pipeline_duration_ms }));
-      setLastRunTs(now());
-      setStatusLine('Demo complete ✓');
-
+      handleRunResult(result, 'demo');
     } catch (err) {
       setStatusLine(`Error: ${err.message}`);
       setIsLive(false);
@@ -734,26 +909,69 @@ function App() {
     }
   };
 
+  /* ── Trigger live run ─────────────────────────────────────────────────── */
+  const handleLive = async () => {
+    if (anyRunning) return;
+    setLiveRunning(true);
+    setIsLive(true);
+    setRunMode('live');
+    setWaMsg('');
+    setAgentLatencies({});
+    setTotalDurationMs(null);
+    setStatusLine('🔴 Live pipeline running…');
+    animate(['monitor','context','resilience','priority','orchestrator','replan','routine','scheduler','comms']);
+
+    try {
+      const r      = await fetch(`${API_BASE}/live`, { method: 'POST', signal: AbortSignal.timeout(180000) });
+      const result = await r.json();
+      if (result.status !== 'ok') throw new Error(result.error || 'non-ok status');
+      handleRunResult(result, 'live');
+      // Refresh calendar after live run (calendar may have changed)
+      fetch(`${API_BASE}/calendar`, { signal: AbortSignal.timeout(10000) })
+        .then(r => r.json())
+        .then(data => { setCalToday(data.today || []); setCalTomorrow(data.tomorrow || []); })
+        .catch(() => {});
+    } catch (err) {
+      setStatusLine(`Error: ${err.message}`);
+      setIsLive(false);
+      setStatuses(p => Object.fromEntries(
+        Object.entries(p).map(([k, v]) => [k, v === 'running' ? 'error' : v])
+      ));
+    } finally {
+      setLiveRunning(false);
+    }
+  };
+
   const handleReset = () => {
     clearAnim();
     setStatuses({ ...IDLE_STATE });
     setLog([]);
     setWaMsg('');
     setCalEvents([]);
+    setAgentLatencies({});
+    setTotalDurationMs(null);
     setIsLive(false);
+    setRunMode(null);
     setStatusLine('Polling /status every 3 s — waiting for first run...');
   };
 
   const completeCount = Object.values(statuses).filter(s => s === 'complete').length;
   const totalAgents   = AGENTS.length;
 
-  /* Placeholder calendar events when no demo has run yet */
-  const displayCal = calEvents.length > 0 ? calEvents : [
-    { id:'p1', title:'Morning Briefing',  time:'7:00 AM – 7:15 AM',   color:'indigo',  tag:'today'    },
-    { id:'p2', title:'Team Standup',      time:'9:30 AM – 9:45 AM',   color:'amber',   tag:'today'    },
-    { id:'p3', title:'Deep Work Block',   time:'10:00 AM – 12:00 PM', color:'emerald', tag:'today'    },
-    { id:'p4', title:'Client Review',     time:'2:30 PM – 3:30 PM',   color:'rose',    tag:'tomorrow' },
-  ];
+  /* ── Calendar display logic ───────────────────────────────────────────── */
+  const calLoading = calToday === null && !calError;
+
+  // After a pipeline run, show rescheduled events; otherwise show real calendar
+  const showPostRunCal = calEvents.length > 0;
+  const postRunTodayEvents   = calEvents.filter(e => e.tag === 'today');
+  const postRunTomorrowEvents = calEvents.filter(e => e.tag === 'tomorrow');
+
+  /* ── Stats values ─────────────────────────────────────────────────────── */
+  const metricsLoading = metrics === null && !metricsErr;
+  const totalRuns    = metrics?.total_runs   ?? '—';
+  const avgLatency   = metrics?.avg_latency_ms != null ? fmtDuration(metrics.avg_latency_ms) : '—';
+  const habitsCount  = metrics?.habits_protected ?? '—';
+  const lastRunVal   = metrics?.last_run_ms != null ? fmtDuration(metrics.last_run_ms) : '—';
 
   /* ── Render ───────────────────────────────────────────────────────────── */
   return (
@@ -761,8 +979,7 @@ function App() {
 
       {/* ── Glass Navbar ──────────────────────────────────────────────── */}
       <div className="glass-navbar" style={{ position: 'sticky', top: 0, zIndex: 100, padding: '14px 22px', overflow: 'hidden' }}>
-        {/* Progress bar (rainbow strip at bottom of navbar) */}
-        {demoRunning && (
+        {anyRunning && (
           <div className="progress-rainbow" style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }} />
         )}
 
@@ -786,9 +1003,9 @@ function App() {
             </div>
           </div>
 
-          {/* Right: live badge + status */}
+          {/* Right: mode badge + status */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            {isLive && (
+            {isLive && runMode === 'live' && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: '6px',
                 background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.22)',
@@ -796,6 +1013,16 @@ function App() {
               }}>
                 <div className="blink-red" style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#F43F5E', boxShadow: '0 0 8px #F43F5E' }} />
                 <span style={{ color: '#F43F5E', fontSize: '11px', fontWeight: 700, letterSpacing: '.1em', fontFamily: "'JetBrains Mono', monospace" }}>LIVE</span>
+              </div>
+            )}
+            {isLive && runMode === 'demo' && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '6px',
+                background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.22)',
+                padding: '4px 13px', borderRadius: '999px',
+              }}>
+                <div className="blink-purple" style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#a855f7', boxShadow: '0 0 8px #a855f7' }} />
+                <span style={{ color: '#c084fc', fontSize: '11px', fontWeight: 700, letterSpacing: '.1em', fontFamily: "'JetBrains Mono', monospace" }}>DEMO</span>
               </div>
             )}
             <div style={{ textAlign: 'right' }}>
@@ -815,16 +1042,16 @@ function App() {
 
         {/* ── Stats bar ──────────────────────────────────────────────── */}
         <div style={{ display: 'flex', gap: '12px' }}>
-          <StatCard label="Pipeline Runs Today" value={stats.runs}                                         gradClass="amber"   icon="⚡" />
-          <StatCard label="Avg Confidence"       value={stats.avgConf != null ? `${stats.avgConf}%` : '—'} gradClass="emerald" icon="🎯" />
-          <StatCard label="Habits Protected"     value={stats.habits}                                       gradClass="indigo"  icon="🔥" />
-          <StatCard label="Last Run Duration"    value={fmtDuration(stats.duration)}                       gradClass="rose"    icon="⏱" />
+          <StatCard label="Pipeline Runs"   value={totalRuns}   gradClass="amber"   icon="⚡" loading={metricsLoading} />
+          <StatCard label="Avg Latency"     value={avgLatency}  gradClass="emerald" icon="🎯" loading={metricsLoading} />
+          <StatCard label="Habits Protected" value={habitsCount} gradClass="indigo"  icon="🔥" loading={metricsLoading} />
+          <StatCard label="Last Run"        value={lastRunVal}  gradClass="rose"    icon="⏱" loading={metricsLoading} />
         </div>
 
         {/* ── Two-column body ────────────────────────────────────────── */}
         <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
 
-          {/* ── LEFT: Agent pipeline + controls + phone ─────────────── */}
+          {/* ── LEFT: Agent pipeline + controls + latency + phone ───── */}
           <div style={{ width: '336px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
             {/* Agent pipeline glass panel */}
@@ -843,8 +1070,8 @@ function App() {
                 {AGENTS.map(a => <AgentCard key={a.id} agent={a} status={statuses[a.id]} />)}
               </div>
 
-              {/* Progress bar (inside panel, while running) */}
-              {demoRunning && (
+              {/* Progress bar (while running) */}
+              {anyRunning && (
                 <div style={{ marginTop: '14px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
                     <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.28)', fontFamily: "'JetBrains Mono', monospace" }}>Progress</span>
@@ -856,7 +1083,9 @@ function App() {
                     <div style={{
                       height: '100%', borderRadius: '999px',
                       width: `${(completeCount / totalAgents) * 100}%`,
-                      background: 'linear-gradient(90deg, #6366F1, #F59E0B, #10B981)',
+                      background: liveRunning
+                        ? 'linear-gradient(90deg, #9B1C1C, #F43F5E, #FDA4AF)'
+                        : 'linear-gradient(90deg, #6366F1, #F59E0B, #10B981)',
                       transition: 'width .35s ease',
                     }} />
                   </div>
@@ -864,24 +1093,35 @@ function App() {
               )}
             </div>
 
-            {/* Buttons */}
+            {/* Buttons: DEMO | LIVE | RESET */}
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
                 onClick={handleDemo}
-                disabled={demoRunning}
+                disabled={anyRunning}
                 className="btn-demo"
-                style={{ flex: 1, padding: '12px 16px', borderRadius: '12px', fontSize: '12px' }}
+                style={{ flex: 1, padding: '12px 10px', borderRadius: '12px', fontSize: '11px' }}
               >
                 {demoRunning ? '⚡ RUNNING…' : '⚡ TRIGGER DEMO'}
               </button>
               <button
+                onClick={handleLive}
+                disabled={anyRunning}
+                className="btn-live"
+                style={{ flex: 1, padding: '12px 10px', borderRadius: '12px', fontSize: '11px' }}
+              >
+                {liveRunning ? '🔴 RUNNING…' : '🔴 LIVE RUN'}
+              </button>
+              <button
                 onClick={handleReset}
                 className="btn-reset"
-                style={{ padding: '12px 16px', borderRadius: '12px' }}
+                style={{ padding: '12px 14px', borderRadius: '12px' }}
               >
                 RESET
               </button>
             </div>
+
+            {/* Per-agent latency chart (shown after any run) */}
+            <LatencyChart agentLatencies={agentLatencies} totalMs={totalDurationMs} />
 
             {/* WhatsApp phone mockup */}
             {waMsg && <PhoneMockup message={waMsg} />}
@@ -907,7 +1147,7 @@ function App() {
                     <div style={{ fontSize: '48px', marginBottom: '14px', filter: 'grayscale(0.2) opacity(0.6)' }}>🎯</div>
                     <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: '13px', fontFamily: "'Outfit', sans-serif" }}>No pipeline runs yet.</div>
                     <div style={{ color: 'rgba(255,255,255,0.1)', fontSize: '11px', marginTop: '7px', fontFamily: "'JetBrains Mono', monospace" }}>
-                      Hit <span style={{ color: '#F59E0B' }}>TRIGGER DEMO</span> or wait for live data.
+                      Hit <span style={{ color: '#F59E0B' }}>TRIGGER DEMO</span> or <span style={{ color: '#F43F5E' }}>LIVE RUN</span> to start.
                     </div>
                   </div>
                 ) : (
@@ -916,19 +1156,55 @@ function App() {
               </div>
             </div>
 
-            {/* Calendar panel */}
+            {/* Calendar panel — real Google Calendar data */}
             <div className="glass" style={{ padding: '16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                 <span style={{ color: '#6366F1', fontSize: '10px', fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', fontFamily: "'JetBrains Mono', monospace" }}>
                   📅 Calendar Events
                 </span>
                 <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: '10px', fontFamily: "'JetBrains Mono', monospace" }}>
-                  Today / Tomorrow
+                  {showPostRunCal ? 'post-run view' : calLoading ? 'loading…' : 'live from calendar'}
                 </span>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                {displayCal.map(e => <CalEvent key={e.id} title={e.title} time={e.time} color={e.color} tag={e.tag} />)}
-              </div>
+
+              {showPostRunCal ? (
+                /* Post-run: show rescheduled events */
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  {calEvents.map(e => <CalEvent key={e.id} title={e.title} time={e.time} color={e.color} tag={e.tag} />)}
+                </div>
+              ) : (
+                /* Real calendar: split into Today / Tomorrow columns */
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  {/* TODAY */}
+                  <div>
+                    <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '.1em', color: 'rgba(255,255,255,0.3)', fontFamily: "'JetBrains Mono', monospace", marginBottom: '8px' }}>
+                      TODAY
+                    </div>
+                    {calLoading ? <CalSkeleton /> :
+                     calError   ? <CalEmpty msg="Connect calendar to see events" /> :
+                     calToday.length === 0 ? <CalEmpty msg="No events today" /> :
+                     calToday.map(e => {
+                       const p = toCalEventProps(e, 'today');
+                       return <div key={p.id} style={{ marginBottom: '6px' }}><CalEvent title={p.title} time={p.time} color={p.color} tag={null} /></div>;
+                     })
+                    }
+                  </div>
+                  {/* TOMORROW */}
+                  <div>
+                    <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '.1em', color: 'rgba(255,255,255,0.3)', fontFamily: "'JetBrains Mono', monospace", marginBottom: '8px' }}>
+                      TOMORROW
+                    </div>
+                    {calLoading ? <CalSkeleton /> :
+                     calError   ? <CalEmpty msg="Connect calendar to see events" /> :
+                     calTomorrow.length === 0 ? <CalEmpty msg="No events tomorrow" /> :
+                     calTomorrow.map(e => {
+                       const p = toCalEventProps(e, 'tomorrow');
+                       return <div key={p.id} style={{ marginBottom: '6px' }}><CalEvent title={p.title} time={p.time} color={p.color} tag={null} /></div>;
+                     })
+                    }
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -7,7 +7,8 @@ from langchain_groq import ChatGroq
 from config.settings import GROQ_MODEL_FAST, GROQ_API_KEY
 from state import PlanBState
 from utils.google_calendar import get_todays_events, create_event, get_free_slots
-from utils.whatsapp import send_message
+from utils.keywords import IST_OFFSET
+from utils.whatsapp import send_message, send_buttons
 
 load_dotenv()
 
@@ -228,6 +229,15 @@ def _build_morning_briefing_message(state: PlanBState) -> str:
         top_risk = min(today_risks, key=lambda r: severity_order.get(r.get("severity", "medium"), 1))
         detail = top_risk.get("detail") or top_risk.get("description") or ""
         lines.append(f"Watch out: {detail}")
+        lines.append("")
+
+    # Day-of-week habit patterns — surface skip warnings
+    today_name = datetime.now().strftime("%A")
+    patterns = (state.get("user_dna") or {}).get("day_of_week_patterns", {})
+    for task, data in patterns.items():
+        if today_name in (data.get("skip_days") or []):
+            lines.append(f"Heads up: you usually skip {task} on {today_name}s. Want to move it?")
+    if patterns and any(today_name in (d.get("skip_days") or []) for d in patterns.values()):
         lines.append("")
 
     # Focus on — highest-scored event, or first event if no scores present
@@ -488,6 +498,102 @@ def _build_lifestyle_message(state: PlanBState) -> str:
             lines.append("Reply 'yes' to reschedule.")
 
     return "\n".join(lines).strip() or "I'm here to help! What do you need?"
+
+
+_FREQUENCY_TO_RRULE = {
+    "daily": "RRULE:FREQ=DAILY",
+    "weekdays": "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+    "weekends": "RRULE:FREQ=WEEKLY;BYDAY=SA,SU",
+    "monday": "RRULE:FREQ=WEEKLY;BYDAY=MO",
+    "tuesday": "RRULE:FREQ=WEEKLY;BYDAY=TU",
+    "wednesday": "RRULE:FREQ=WEEKLY;BYDAY=WE",
+    "thursday": "RRULE:FREQ=WEEKLY;BYDAY=TH",
+    "friday": "RRULE:FREQ=WEEKLY;BYDAY=FR",
+    "saturday": "RRULE:FREQ=WEEKLY;BYDAY=SA",
+    "sunday": "RRULE:FREQ=WEEKLY;BYDAY=SU",
+}
+
+
+def _handle_routine_setup(state: PlanBState) -> str:
+    """Parse a routine-setup message, create a recurring calendar event, return confirmation."""
+    import json as _json
+
+    raw = (state.get("disruption_raw") or "").strip()
+    phone = state.get("user_phone")
+
+    parse_prompt = (
+        "Extract routine details from this message. Return ONLY valid JSON:\n"
+        '{"habit_name": "Gym", "time": "18:00", "frequency": "weekdays", "duration_minutes": 60}\n'
+        'frequency must be one of: daily, weekdays, weekends, monday, tuesday, wednesday, '
+        'thursday, friday, saturday, sunday\n\n'
+        f"Message: {raw}"
+    )
+
+    habit_name = "Habit"
+    time_str = "08:00"
+    frequency = "daily"
+    duration = 60
+
+    try:
+        llm = ChatGroq(model=GROQ_MODEL_FAST, api_key=GROQ_API_KEY)
+        resp = llm.invoke(parse_prompt)
+        text = resp.content.strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        parsed = _json.loads(text)
+        habit_name = parsed.get("habit_name", habit_name)
+        time_str = parsed.get("time", time_str)
+        frequency = parsed.get("frequency", frequency).lower()
+        duration = int(parsed.get("duration_minutes", duration))
+    except Exception as e:
+        print(f"Comms Agent: routine parse failed, using fallback: {e}")
+
+    # Build start/end ISO strings for today at the parsed time in IST
+    try:
+        hour, minute = (int(x) for x in time_str.split(":")[:2])
+    except (ValueError, AttributeError):
+        hour, minute = 8, 0
+
+    today = datetime.now(IST_OFFSET).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    end_time = today + timedelta(minutes=duration)
+    start_iso = today.isoformat()
+    end_iso = end_time.isoformat()
+
+    rrule = _FREQUENCY_TO_RRULE.get(frequency, _FREQUENCY_TO_RRULE["daily"])
+    metadata = {"planb_task_type": "routine", "planb_negotiable": "true"}
+
+    result = create_event(
+        summary=habit_name,
+        start=start_iso,
+        end=end_iso,
+        metadata=metadata,
+        phone=phone,
+        recurrence=rrule,
+    )
+
+    if not result:
+        return f"Sorry, I couldn't create the routine for '{habit_name}'. Please try again."
+
+    freq_label = {
+        "daily": "every day",
+        "weekdays": "every weekday (Mon-Fri)",
+        "weekends": "every weekend",
+    }.get(frequency, f"every {frequency.capitalize()}")
+
+    h = hour % 12 or 12
+    ampm = "AM" if hour < 12 else "PM"
+    display_time = f"{h}:{minute:02d} {ampm}"
+
+    return (
+        f"Done! I've added '{habit_name}' to your calendar — {freq_label} at {display_time} for {duration} min.\n"
+        "\n"
+        "I'll protect it during disruptions and track your streak. Your habit is set.\n"
+        "\n"
+        "Reply 'my stats' anytime to see your habit history."
+    )
 
 
 _SCHEDULE_QUERY_PHRASES = [
@@ -777,6 +883,72 @@ def _build_on_demand_message(state: PlanBState) -> str:
     return "\n".join(lines)
 
 
+def _build_advisory_message(state: PlanBState) -> str:
+    """Format pending proposals for advisory mode — calendar NOT modified."""
+    proposals = state.get("pending_proposals") or []
+    if not proposals:
+        return "I reviewed your schedule and don't see any changes needed right now."
+
+    lines = ["Here's what I'd suggest:", ""]
+    for p in proposals:
+        action = p.get("action", "move")
+        task_name = p.get("task_name", "Unknown")
+        if action == "move":
+            old = p.get("old_time", "?")
+            new = p.get("suggested_time", "?")
+            reason = p.get("reason", "")
+            entry = f"Move \"{task_name}\" from {old} to {new}"
+            if reason:
+                entry += f" ({reason})"
+            lines.append(f"  {entry}")
+        elif action == "drop":
+            reason = p.get("reason", "low priority")
+            lines.append(f"  Drop \"{task_name}\" today ({reason})")
+        elif action == "lighten":
+            reason = p.get("reason", "stress relief")
+            lines.append(f"  Lighten \"{task_name}\" ({reason})")
+        else:
+            lines.append(f"  {action.capitalize()} \"{task_name}\"")
+
+    lines.append("")
+    lines.append("Reply 'approve' to apply these changes, or tell me what to adjust.")
+    return "\n".join(lines)
+
+
+def _build_weekly_scan_message(state: PlanBState) -> str:
+    """Format predictive risks as a week-ahead summary grouped by date."""
+    risks = state.get("predictive_risks") or []
+
+    if not risks:
+        return "Your week ahead looks clear. No scheduling risks detected."
+
+    # Group risks by date
+    by_date: dict = {}
+    for r in risks:
+        date_str = r.get("date", "Unknown")
+        by_date.setdefault(date_str, []).append(r)
+
+    lines = ["Your week ahead:", ""]
+    for date_str in sorted(by_date.keys()):
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            day_label = dt.strftime("%A %b %d")
+        except (ValueError, TypeError):
+            day_label = date_str
+
+        day_risks = by_date[date_str]
+        lines.append(f"{day_label}:")
+        for r in day_risks:
+            detail = r.get("detail") or r.get("description") or "Risk detected"
+            severity = r.get("severity", "")
+            prefix = "  ⚠" if severity == "high" else "  •"
+            lines.append(f"{prefix} {detail}")
+        lines.append("")
+
+    lines.append("Reply 'buffer it' to auto-fix risky days.")
+    return "\n".join(lines)
+
+
 # ── Main agent ─────────────────────────────────────────────────────────────────
 
 def comms_agent(state: PlanBState) -> PlanBState:
@@ -798,7 +970,10 @@ def comms_agent(state: PlanBState) -> PlanBState:
 
     # STEP 1 — Build raw message
     try:
-        if mode == "onboarding":
+        # Advisory mode override — if proposals are pending, show them instead
+        if state.get("awaiting_confirmation") and state.get("pending_proposals"):
+            raw_message = _build_advisory_message(state)
+        elif mode == "onboarding":
             raw_message = _build_onboarding_message(state)
         elif mode == "undo":
             raw_message = _build_undo_message(state)
@@ -814,8 +989,12 @@ def comms_agent(state: PlanBState) -> PlanBState:
             raw_message = _build_evening_review_message(state)
         elif mode == "query":
             raw_message = _build_query_message(state)
+        elif mode == "weekly_scan":
+            raw_message = _build_weekly_scan_message(state)
         elif mode == "lifestyle":
             raw_message = _build_lifestyle_message(state)
+        elif mode == "routine_setup":
+            raw_message = _handle_routine_setup(state)
         else:
             raw_message = _build_on_demand_message(state)
     except Exception as e:
@@ -827,7 +1006,10 @@ def comms_agent(state: PlanBState) -> PlanBState:
     # - lifestyle: contains URLs that Groq would mangle
     # - query / on_demand: contain real event names/times that must not be altered
     polished_message = raw_message
-    if mode not in ("lifestyle", "query", "on_demand", "onboarding"):
+    skip_polish = mode in ("lifestyle", "query", "on_demand", "onboarding", "weekly_scan", "routine_setup")
+    if state.get("awaiting_confirmation"):
+        skip_polish = True
+    if not skip_polish:
         try:
             llm = ChatGroq(model=GROQ_MODEL_FAST, api_key=GROQ_API_KEY)
             prompt = POLISH_PROMPT.format(raw_message=raw_message)
@@ -836,11 +1018,26 @@ def comms_agent(state: PlanBState) -> PlanBState:
         except Exception as e:
             print(f"Comms Agent: Groq polishing failed, sending raw message: {e}")
 
-    # STEP 3 — Send the message
+    # STEP 3 — Send the message (with interactive buttons for actionable modes)
     user_phone = state.get("user_phone")
     try:
         if user_phone:
-            send_message(user_phone, polished_message)
+            buttons = None
+            if state.get("awaiting_confirmation"):
+                buttons = [{"id": "approve", "title": "Approve All"}, {"id": "undo", "title": "Cancel"}]
+            elif mode == "disruption":
+                buttons = [{"id": "undo", "title": "Undo"}, {"id": "approve", "title": "OK"}]
+            elif mode == "crisis":
+                buttons = [{"id": "approve", "title": "Got it"}, {"id": "undo", "title": "Undo"}]
+            elif mode == "morning_briefing":
+                risks = state.get("predictive_risks") or []
+                if risks:
+                    buttons = [{"id": "buffer", "title": "Buffer It"}]
+
+            if buttons:
+                send_buttons(user_phone, polished_message, buttons)
+            else:
+                send_message(user_phone, polished_message)
         else:
             print(f"[Comms Agent — no phone, printing to console]\n{polished_message}")
     except Exception as e:

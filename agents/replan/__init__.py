@@ -14,6 +14,11 @@ load_dotenv()
 REPLAN_PROMPT = """\
 You are a scheduling assistant replanning a day after a disruption.
 
+User Personalization (from learned history):
+{dna_context}
+
+Apply these constraints with highest priority — they override general scheduling rules.
+
 Disruption summary: {context_summary}
 Severity: {severity}
 Hours lost today: {hours_impacted}
@@ -136,6 +141,45 @@ def replan_agent(state: PlanBState) -> PlanBState:
             state["proposed_schedule"] = []
             return state
 
+        # Build DNA context for personalised scheduling
+        user_dna = state.get("user_dna") or {}
+        dna_lines = []
+
+        protected = user_dna.get("protected_habits") or []
+        if protected:
+            dna_lines.append(f"- NEVER DROP (protected habits): {', '.join(protected)}")
+
+        never_move = user_dna.get("never_reschedule") or []
+        if never_move:
+            dna_lines.append(f"- NEVER RESCHEDULE: {', '.join(never_move)}")
+
+        peak = user_dna.get("peak_hours") or []
+        if peak:
+            dna_lines.append(f"- PEAK HOURS {', '.join(peak)}: keep deep work / focus tasks here")
+
+        meeting_window = user_dna.get("preferred_meeting_window") or ""
+        if meeting_window:
+            dna_lines.append(f"- PREFERRED MEETING WINDOW: {meeting_window}")
+
+        learned = user_dna.get("learned_overrides") or {}
+        flexible = [k for k, v in learned.items() if v >= 3]
+        if flexible:
+            dna_lines.append(
+                f"- HISTORICALLY FLEXIBLE (moved 3+ times, safe to reschedule): {', '.join(flexible)}"
+            )
+
+        dow_patterns = user_dna.get("day_of_week_patterns") or {}
+        for task, data in dow_patterns.items():
+            if data.get("skip_days"):
+                dna_lines.append(
+                    f"- User often skips {task} on {', '.join(data['skip_days'])} — deprioritize"
+                )
+
+        dna_context = (
+            "\n".join(dna_lines) if dna_lines
+            else "No personalization data yet — use general rules."
+        )
+
         directly_blocked = set(cascade_map.get("directly_blocked", []))
 
         # Build set of past event IDs — events that started before current_time are already done
@@ -198,6 +242,7 @@ def replan_agent(state: PlanBState) -> PlanBState:
         # Call Groq
         llm = ChatGroq(model=GROQ_MODEL_LARGE, api_key=GROQ_API_KEY)
         prompt = REPLAN_PROMPT.format(
+            dna_context=dna_context,
             context_summary=context_summary,
             severity=severity,
             hours_impacted=hours_impacted,

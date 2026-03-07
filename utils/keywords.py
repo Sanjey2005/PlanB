@@ -33,6 +33,28 @@ DISRUPTION_KEYWORDS = [
     "plans with", "invited me",
     "going out", "family dinner", "unexpected plans", "something came up",
     "can't make it", "need to cancel", "have to leave",
+    # Vague disruption phrases
+    "come up", "came up",
+    "my day changed", "day got disrupted", "day is gone",
+    "afternoon is gone", "can't do anything", "no time for",
+    "running behind", "behind schedule", "way behind",
+    "everything shifted", "plans changed", "situation changed",
+    "won't make it", "not going to make it",
+    "got pulled into", "called into", "dragged into",
+    "stuck in", "trapped in",
+    "fell through", "fell apart",
+    "last minute", "last-minute",
+    "personal matter", "family matter", "urgent matter",
+]
+
+ROUTINE_SETUP_KEYWORDS = [
+    "add routine", "set up routine", "create routine",
+    "protect my", "block time for", "add habit",
+    "every day", "every morning", "every evening",
+    "every weekday", "every weekend", "every monday",
+    "every tuesday", "every wednesday", "every thursday",
+    "every friday", "every saturday", "every sunday",
+    "daily habit", "recurring", "remind me to",
 ]
 
 QUERY_KEYWORDS = ["what", "show", "list", "when", "schedule"]
@@ -68,6 +90,8 @@ SCHEDULABLE_ITEMS = [
     "gym", "workout", "appointment", "session", "hangout",
     "catch up", "drinks", "brunch", "date", "outing",
 ]
+
+APPROVAL_KEYWORDS = ["approve", "yes do it", "go ahead", "confirm", "apply", "make it so", "approved"]
 
 CLEAR_SCHEDULE_KEYWORDS = [
     "clear my schedule", "cancel everything", "reschedule rest of day",

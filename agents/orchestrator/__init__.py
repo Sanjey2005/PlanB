@@ -120,6 +120,12 @@ def orchestrator_agent(state: PlanBState) -> PlanBState:
         elif mode == "stress":
             agents_to_fire = ["stress", "comms"]
 
+        elif mode == "apply_proposals":
+            agents_to_fire = ["scheduler", "comms"]
+
+        elif mode == "weekly_scan":
+            agents_to_fire = ["predictive_risk", "comms"]
+
         elif mode in ("morning_briefing", "evening_review"):
             agents_to_fire = ["predictive_risk", "comms"]
 
@@ -128,6 +134,9 @@ def orchestrator_agent(state: PlanBState) -> PlanBState:
 
         elif mode == "lifestyle":
             agents_to_fire = ["lifestyle", "comms"]
+
+        elif mode == "routine_setup":
+            agents_to_fire = ["comms"]
 
         elif mode == "on_demand":
             agents_to_fire = _classify_on_demand_intent(disruption_raw)

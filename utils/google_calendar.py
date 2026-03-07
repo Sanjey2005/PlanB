@@ -214,8 +214,19 @@ def update_event_time(event_id: str, new_start: str, new_end: str, phone: str = 
         return {}
 
 
-def create_event(summary: str, start: str, end: str, metadata: dict = None, phone: str = None) -> dict:
-    """Create a new calendar event. Optionally store PlanB metadata in extendedProperties."""
+def create_event(
+    summary: str,
+    start: str,
+    end: str,
+    metadata: dict = None,
+    phone: str = None,
+    recurrence: str = None,
+) -> dict:
+    """Create a new calendar event. Optionally store PlanB metadata in extendedProperties.
+
+    Args:
+        recurrence: RRULE string e.g. "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
+    """
     try:
         service = build_service(phone)
         event_body = {
@@ -223,6 +234,9 @@ def create_event(summary: str, start: str, end: str, metadata: dict = None, phon
             "start": {"dateTime": start, "timeZone": TIMEZONE},
             "end": {"dateTime": end, "timeZone": TIMEZONE},
         }
+
+        if recurrence:
+            event_body["recurrence"] = [recurrence]
 
         if metadata:
             event_body["extendedProperties"] = {

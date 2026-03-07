@@ -12,10 +12,31 @@ from utils.keywords import (
     DISRUPTION_KEYWORDS, QUERY_KEYWORDS, HABIT_STATS_KEYWORDS,
     BUFFER_KEYWORDS, UNDO_KEYWORDS, LATE_OFFICE_KEYWORDS,
     HUNGRY_KEYWORDS, CAB_KEYWORDS, SCHEDULE_REQUEST_VERBS,
-    SCHEDULABLE_ITEMS, CLEAR_SCHEDULE_KEYWORDS,
+    SCHEDULABLE_ITEMS, CLEAR_SCHEDULE_KEYWORDS, APPROVAL_KEYWORDS,
+    ROUTINE_SETUP_KEYWORDS,
 )
 
 load_dotenv()
+
+
+def _looks_like_disruption(text: str) -> bool:
+    """Heuristic: does the message imply a schedule change without matching keywords?"""
+    time_signals = any(w in text for w in [
+        "today", "this morning", "this afternoon", "this evening",
+        "now", "just", "suddenly", "afternoon", "morning",
+    ])
+    disruption_signals = any(w in text for w in [
+        "can't", "cant", "cannot", "won't", "wont", "not able", "unable",
+        "have to", "need to", "got to", "gotta",
+        "no longer", "not happening", "push", "move",
+        "different", "changed", "fell", "broke",
+    ])
+    schedule_signals = any(w in text for w in [
+        "meeting", "appointment", "plan", "schedule", "calendar",
+        "today", "tomorrow", "morning", "afternoon", "evening",
+        "work", "office", "gym", "lunch", "call",
+    ])
+    return time_signals and disruption_signals and schedule_signals
 
 
 def monitor_agent(state: PlanBState) -> PlanBState:
@@ -53,7 +74,10 @@ def monitor_agent(state: PlanBState) -> PlanBState:
             return state
 
         message = (state.get("disruption_raw") or "").lower()
-        if any(kw in message for kw in CALENDAR_CONNECT_KEYWORDS):
+        if any(kw in message for kw in APPROVAL_KEYWORDS):
+            state["mode"] = "apply_proposals"
+            return state
+        elif any(kw in message for kw in CALENDAR_CONNECT_KEYWORDS):
             state["mode"] = "on_demand"
             state["disruption_raw"] = "CALENDAR_CONNECT_REQUEST"
         elif any(kw in message for kw in STRESS_KEYWORDS):
@@ -74,6 +98,10 @@ def monitor_agent(state: PlanBState) -> PlanBState:
         elif any(kw in message for kw in LATE_OFFICE_KEYWORDS + HUNGRY_KEYWORDS + CAB_KEYWORDS):
             state["mode"] = "lifestyle"
             # disruption_raw already holds the original message — no overwrite needed
+        elif (any(kw in message for kw in ROUTINE_SETUP_KEYWORDS)
+              and (any(n in message for n in SCHEDULABLE_ITEMS)
+                   or any(c in message for c in ["am", "pm", ":"]))):
+            state["mode"] = "routine_setup"
         elif (any(v in message for v in SCHEDULE_REQUEST_VERBS)
               and any(n in message for n in SCHEDULABLE_ITEMS)
               and not any(a in message for a in ("cancel", "postpone", "drop", "remove", "delete"))):
@@ -84,6 +112,8 @@ def monitor_agent(state: PlanBState) -> PlanBState:
             state["mode"] = "disruption"
         elif any(kw in message for kw in QUERY_KEYWORDS):
             state["mode"] = "query"
+        elif _looks_like_disruption(message):
+            state["mode"] = "disruption"
         else:
             state["mode"] = "on_demand"
         return state
@@ -101,9 +131,9 @@ def monitor_agent(state: PlanBState) -> PlanBState:
         else:
             state["disruption_raw"] = "No events scheduled for today."
 
-        # Preserve mode if already set to morning_briefing or evening_review
+        # Preserve mode if already set to morning_briefing, evening_review, or weekly_scan
         current_mode = state.get("mode")
-        if current_mode not in ("morning_briefing", "evening_review"):
+        if current_mode not in ("morning_briefing", "evening_review", "weekly_scan"):
             state["mode"] = "morning_briefing"
 
         return state

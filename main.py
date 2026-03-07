@@ -630,6 +630,131 @@ async def serve_dashboard():
     return FileResponse(path, media_type="text/html")
 
 
+@app.get("/demo/scenario/{scenario_id}")
+async def demo_scenario(scenario_id: str):
+    """Run a pre-built demo scenario through the mock pipeline.
+
+    Uses the same mocking strategy as /demo (no live API calls).
+    Returns the WhatsApp message and decision log for the chosen scenario.
+
+    Available scenario IDs:
+        basic_disruption, vague_disruption, advisory_mode, routine_setup,
+        stress_mode, query, morning_briefing, habit_stats
+    """
+    import contextlib
+    import time as _time
+    from unittest.mock import MagicMock, patch
+    from utils.demo_scenarios import SCENARIO_INDEX
+    from utils.demo_data import (
+        DEMO_CALENDAR, DEMO_FREE_SLOTS, DEMO_TOMORROW_EVENTS, DEMO_USER_PHONE,
+    )
+    from graph import app as graph_app
+
+    scenario = SCENARIO_INDEX.get(scenario_id)
+    if not scenario:
+        ids = list(SCENARIO_INDEX.keys())
+        return {"status": "error", "message": f"Unknown scenario '{scenario_id}'. Available: {ids}"}
+
+    initial_state = get_initial_state()
+    initial_state["user_phone"] = DEMO_USER_PHONE
+
+    source = scenario.get("source", "user_message")
+    if source == "scheduled":
+        initial_state["disruption_source"] = "scheduled"
+        initial_state["mode"] = scenario.get("mode", "morning_briefing")
+        initial_state["disruption_raw"] = ""
+    else:
+        initial_state["disruption_raw"] = scenario.get("message", "")
+        initial_state["disruption_source"] = "user_message"
+        initial_state["mode"] = "disruption"  # monitor will re-classify
+
+    captured: list[str] = []
+
+    def _mock_send(to, msg):
+        captured.append(msg)
+        return {"messages_sent": 1}
+
+    _DEMO_DNA = {
+        "protected_habits": ["Gym"],
+        "peak_hours": ["9AM-12PM"],
+        "preferred_meeting_window": "2PM-5PM",
+        "learned_overrides": {"Client Call": 2},
+        "streak_records": {"Gym": {"kept_streak": 5}},
+        "total_pipeline_runs": 12,
+    }
+
+    patches = [
+        patch("agents.priority.get_todays_events", return_value=DEMO_CALENDAR),
+        patch("agents.priority.get_events_range", return_value=DEMO_TOMORROW_EVENTS),
+        patch("agents.priority.get_learned_scores", return_value={}),
+        patch("agents.resilience.get_events_range", return_value=DEMO_TOMORROW_EVENTS),
+        patch("agents.replan.get_todays_events", return_value=DEMO_CALENDAR),
+        patch("agents.routine.get_todays_events", return_value=DEMO_CALENDAR),
+        patch("agents.routine.get_drop_count_last_n_days", return_value=0),
+        patch("agents.scheduler.get_todays_events", return_value=DEMO_CALENDAR),
+        patch("agents.scheduler.get_events_range", return_value=DEMO_TOMORROW_EVENTS),
+        patch("agents.scheduler.update_event_time", return_value=True),
+        patch("agents.scheduler.get_free_slots", return_value=DEMO_FREE_SLOTS),
+        patch("agents.comms.send_message", side_effect=_mock_send),
+        patch("agents.comms.create_event", return_value={"id": "mock123", "summary": "Mock Event"}),
+        patch("utils.google_calendar.get_todays_events", return_value=DEMO_CALENDAR),
+        patch("utils.google_calendar.get_events_range", return_value=DEMO_TOMORROW_EVENTS),
+        patch("utils.google_calendar.update_event_time", return_value=True),
+        patch("utils.google_calendar.create_event", return_value={"id": "mock123"}),
+        patch("agents.negotiate.boto3.client", return_value=MagicMock()),
+        patch("graph.log_pipeline_run", return_value="demo/mock-run"),
+        patch("graph.get_user_dna", return_value=dict(_DEMO_DNA)),
+        patch("graph.update_user_dna", return_value=None),
+    ]
+
+    agents_fired: list[str] = []
+    agent_latencies: dict[str, int] = {}
+    final_state: dict = dict(initial_state)
+    error_info = None
+    start_ms = _time.time() * 1000
+
+    try:
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            prev_ms = start_ms
+            for chunk in graph_app.stream(initial_state):
+                now_ms = _time.time() * 1000
+                for node_name, node_updates in chunk.items():
+                    agents_fired.append(node_name)
+                    if isinstance(node_updates, dict):
+                        final_state.update(node_updates)
+                    agent_latencies[node_name] = int(now_ms - prev_ms)
+                    prev_ms = now_ms
+    except Exception as exc:
+        error_info = str(exc)
+        print(f"[Demo Scenario] Pipeline error: {exc}")
+
+    duration_ms = int(_time.time() * 1000 - start_ms)
+    whatsapp_message = captured[0] if captured else final_state.get("whatsapp_message", "")
+
+    return {
+        "status": "ok" if not error_info else "error",
+        "scenario": scenario_id,
+        "label": scenario.get("label", ""),
+        "expected_mode": scenario.get("expected_mode"),
+        "actual_mode": final_state.get("mode"),
+        "whatsapp_message": whatsapp_message,
+        "agents_fired": agents_fired,
+        "agent_latencies": agent_latencies,
+        "pipeline_duration_ms": duration_ms,
+        "decision_log": {
+            "mode": final_state.get("mode"),
+            "severity": final_state.get("severity"),
+            "delegation_depth": final_state.get("delegation_depth"),
+            "decision_reasoning": final_state.get("decision_reasoning"),
+            "confirmed_schedule": final_state.get("confirmed_schedule"),
+            "routine_decisions": final_state.get("routine_decisions"),
+        },
+        **({"error": error_info} if error_info else {}),
+    }
+
+
 @app.get("/health")
 async def health_check():
     """Simple health check endpoint."""

@@ -156,6 +156,52 @@ async def scheduled_trigger(body: ScheduledTriggerBody, background_tasks: Backgr
     return {"status": "ok", "mode": body.mode}
 
 
+def _run_gmail_pipeline(email_body: str, phone: str):
+    """Background task: run the agent pipeline for an incoming Gmail push notification."""
+    try:
+        initial_state = get_initial_state()
+        initial_state["disruption_raw"] = email_body
+        initial_state["disruption_source"] = "gmail_webhook"
+        initial_state["mode"] = "disruption"
+        initial_state["user_phone"] = phone
+        run_pipeline(initial_state)
+    except Exception as e:
+        print(f"[Pipeline] Gmail pipeline error: {e}")
+
+
+@app.post("/gmail")
+async def gmail_push(request: Request, background_tasks: BackgroundTasks):
+    """Receive Gmail Pub/Sub push notifications for disruption detection.
+
+    Google Pub/Sub sends a POST with a base64-encoded message containing the
+    user's email data. This endpoint decodes it and triggers the pipeline with
+    disruption_source='gmail_webhook'.
+
+    Always returns 200 so Pub/Sub does not retry indefinitely.
+    """
+    import base64
+
+    try:
+        payload = await request.json()
+        message = payload.get("message", {})
+        data = message.get("data", "")
+        if data:
+            decoded = base64.b64decode(data).decode("utf-8")
+        else:
+            decoded = ""
+
+        # The phone/user mapping should come from the Pub/Sub subscription attributes
+        # or from a user registry. For now, use the env var or subscription attribute.
+        phone = message.get("attributes", {}).get("phone", os.getenv("USER_PHONE", ""))
+
+        if decoded:
+            background_tasks.add_task(_run_gmail_pipeline, decoded, phone)
+    except Exception as e:
+        print(f"[Gmail] Error processing Pub/Sub push: {e}")
+
+    return {"status": "ok"}
+
+
 def _classify_event_type(event: dict) -> str:
     """Classify a Google Calendar event into a display type based on its summary."""
     summary = (event.get("summary") or "").lower()

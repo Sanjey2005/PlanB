@@ -139,6 +139,14 @@ def orchestrator_agent(state: PlanBState) -> PlanBState:
             agents_to_fire = ["comms"]
 
         state["agents_to_fire"] = agents_to_fire
+
+        # Transparent reasoning — explain why this routing was chosen
+        depth = state["delegation_depth"]
+        state["decision_reasoning"] = (
+            f"Mode: {mode}. Severity: {severity}. Cascade: {cascade_severity}. "
+            f"Delegation: {depth}. Agents fired: {', '.join(agents_to_fire)}."
+        )
+
         return state
 
     except Exception as e:

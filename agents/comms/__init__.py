@@ -170,7 +170,8 @@ def _build_disruption_message(state: PlanBState) -> str:
             lines.append(f"⚠ {r.get('task', 'Task')}: {r.get('reason', '')}")
         lines.append("")
 
-    lines.append("Your calendar is updated. Reply 'undo' to revert any change.")
+    lines.append("Your calendar is updated.")
+    lines.append("Reply: 'undo' to revert | 'my stats' for habit history")
     return "\n".join(lines)
 
 

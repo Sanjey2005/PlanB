@@ -155,7 +155,7 @@ def predictive_risk_agent(state: PlanBState) -> PlanBState:
     """
     try:
         mode = state.get("mode")
-        if mode not in ("morning_briefing", "evening_review"):
+        if mode not in ("morning_briefing", "evening_review", "weekly_scan"):
             return state
 
         # Fetch next 7 days of events

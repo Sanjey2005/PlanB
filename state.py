@@ -64,6 +64,10 @@ class PlanBState(TypedDict, total=False):
     stress_mode: Optional[bool]
     stress_actions: Optional[list]
 
+    # Advisory mode — proposal tracking
+    pending_proposals: Optional[list]      # [{task_name, action, old_time, suggested_time, reason}]
+    awaiting_confirmation: Optional[bool]  # True when advisory proposals need user approval
+
     # Undo Agent
     undo_result: Optional[dict]
 
@@ -117,6 +121,8 @@ def get_initial_state() -> dict:
         "decision_reasoning": None,
         "stress_mode": None,
         "stress_actions": None,
+        "pending_proposals": None,
+        "awaiting_confirmation": None,
         "undo_result": None,
         "lifestyle_actions": None,
         "user_dna": None,

@@ -42,6 +42,7 @@ from state import PlanBState, get_initial_state
 from utils.s3_logger import log_pipeline_run
 from utils.user_dna import get_user_dna, update_user_dna
 from utils.keywords import IST_OFFSET
+from utils.s3_logger import get_last_pipeline_run
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +77,8 @@ def route_after_orchestrator(state: PlanBState) -> str:
         return "predictive_risk"
     elif "lifestyle" in agents:
         return "lifestyle"
+    elif "scheduler" in agents and "replan" not in agents:
+        return "scheduler"
     else:
         return "comms"
 
@@ -145,6 +148,7 @@ graph.add_conditional_edges(
         "replan": "replan",
         "predictive_risk": "predictive_risk",
         "lifestyle": "lifestyle",
+        "scheduler": "scheduler",
         "comms": "comms",
     },
 )
@@ -210,6 +214,27 @@ def run_pipeline(initial_state: dict) -> dict:
         state["user_dna"] = get_user_dna(user_phone)
     except Exception as e:
         print(f"Pipeline: User DNA load failed: {e}")
+
+    # Apply proposals mode — load pending proposals from last run and convert to proposed_schedule
+    if state.get("mode") == "apply_proposals":
+        try:
+            last_run = get_last_pipeline_run(user_phone)
+            pending = last_run.get("pending_proposals") or []
+            proposed = []
+            for p in pending:
+                proposed.append({
+                    "task_name": p.get("task_name", ""),
+                    "task_id": p.get("task_id", ""),
+                    "action": "move" if p.get("action") in ("move", "lighten") else p.get("action", "move"),
+                    "old_time": p.get("old_time", ""),
+                    "suggested_time": p.get("suggested_time", ""),
+                    "reason": p.get("reason", ""),
+                })
+            state["proposed_schedule"] = proposed
+            state["delegation_depth"] = "assisted"
+            state["awaiting_confirmation"] = False
+        except Exception as e:
+            print(f"Pipeline: apply_proposals load failed: {e}")
 
     result = app.invoke(state)
 

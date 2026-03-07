@@ -80,6 +80,9 @@ def crisis_agent(state: PlanBState) -> PlanBState:
         task_scores = state.get("task_scores") or {}
         crisis_actions = []
 
+        # Advisory guard — propose crisis actions without executing them
+        delegation_depth = state.get("delegation_depth") or "assisted"
+
         # STEP 1 — Load today's events and split by priority threshold
         user_phone = state.get("user_phone")
         events = get_todays_events(phone=user_phone)
@@ -109,6 +112,16 @@ def crisis_agent(state: PlanBState) -> PlanBState:
 
         state["proposed_schedule"] = kept_schedule
         print(f"[Crisis] Dropped {len(dropped_events)} low-priority tasks, kept {len(kept_schedule)}.")
+
+        if delegation_depth == "advisory":
+            state["pending_proposals"] = [
+                {"action": "drop", "task_name": e.get("summary", "Unknown"),
+                 "reason": f"Low priority ({task_scores.get(e.get('id', ''), '?')}) — would be dropped in crisis mode"}
+                for e in dropped_events
+            ]
+            state["awaiting_confirmation"] = True
+            state["crisis_actions"] = []
+            return state
 
         # STEP 2 — Create 3-hour DND calendar block
         dnd_event = _create_dnd_block(phone=user_phone)

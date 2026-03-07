@@ -138,6 +138,84 @@ def get_learned_scores(task_names: list, user_phone: str = "") -> dict:
     return {name: _score_cache.get((user_phone, name), 0) for name in task_names}
 
 
+def get_day_of_week_patterns(user_phone: str = "") -> dict:
+    """Detect day-of-week skip/strong patterns from S3 logs.
+
+    Returns: {task_name: {"skip_days": ["Friday"], "strong_days": ["Monday"],
+              "insight": "You skip gym 4 out of 5 Fridays"}}
+    """
+    try:
+        logs = _load_all_logs(_DEFAULT_DAYS, user_phone=user_phone)
+    except Exception as e:
+        print(f"[HabitLearner] Failed to load logs for day-of-week patterns: {e}")
+        return {}
+
+    # {task_name: {day_name: {"kept": count, "dropped": count}}}
+    day_stats: dict = {}
+    DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    for log in logs:
+        routine_decisions = log.get("routine_decisions") or {}
+        if not routine_decisions:
+            continue
+
+        # Determine the day of week from the log's current_time or fall back
+        current_time = log.get("current_time", "")
+        try:
+            log_dt = datetime.fromisoformat(current_time)
+            day_name = DAY_NAMES[log_dt.weekday()]
+        except (ValueError, TypeError):
+            continue
+
+        for task_name, data in routine_decisions.items():
+            if not task_name:
+                continue
+            decision = (data.get("decision") or "").lower()
+            if decision not in ("kept", "dropped"):
+                continue
+
+            if task_name not in day_stats:
+                day_stats[task_name] = {}
+            if day_name not in day_stats[task_name]:
+                day_stats[task_name][day_name] = {"kept": 0, "dropped": 0}
+
+            day_stats[task_name][day_name][decision] += 1
+
+    # Analyze for patterns (min 3 data points, >60% skip = skip_day, >80% kept = strong_day)
+    MIN_DATA_POINTS = 3
+    SKIP_THRESHOLD = 0.6
+    STRONG_THRESHOLD = 0.8
+
+    patterns = {}
+    for task_name, days in day_stats.items():
+        skip_days = []
+        strong_days = []
+        insights = []
+
+        for day_name, counts in days.items():
+            total = counts["kept"] + counts["dropped"]
+            if total < MIN_DATA_POINTS:
+                continue
+
+            drop_rate = counts["dropped"] / total
+            keep_rate = counts["kept"] / total
+
+            if drop_rate >= SKIP_THRESHOLD:
+                skip_days.append(day_name)
+                insights.append(f"You skip {task_name} {counts['dropped']} out of {total} {day_name}s")
+            elif keep_rate >= STRONG_THRESHOLD:
+                strong_days.append(day_name)
+
+        if skip_days or strong_days:
+            patterns[task_name] = {
+                "skip_days": skip_days,
+                "strong_days": strong_days,
+                "insight": "; ".join(insights) if insights else "",
+            }
+
+    return patterns
+
+
 def get_all_habit_stats(user_phone: str = "") -> dict:
     """Return full habit stats for all tasks found in the last 30 days of logs.
 

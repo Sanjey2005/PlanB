@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 
@@ -120,7 +122,15 @@ def routine_agent(state: PlanBState) -> PlanBState:
             except Exception as e:
                 print(f"Routine Agent: streak tracker failed for '{summary}': {e}")
 
-            note = "Note: streak protection active — boosted score" if streak_protected else ""
+            # Day-of-week pattern context
+            dow_note = ""
+            dow_patterns = (state.get("user_dna") or {}).get("day_of_week_patterns", {})
+            today_name = datetime.now().strftime("%A")
+            task_pattern = dow_patterns.get(summary, {})
+            if today_name in (task_pattern.get("skip_days") or []):
+                dow_note = f"Note: user historically skips this task on {today_name}s — bias toward dropping or moving."
+
+            note = "Note: streak protection active — boosted score" if streak_protected else dow_note
             decision, reason = _ask_groq(llm, summary, score, severity, fatigue_level, note=note)
 
             routine_decisions[summary] = {

@@ -122,6 +122,27 @@ def scheduler_agent(state: PlanBState) -> PlanBState:
         if not proposed:
             return state
 
+        # Advisory guard — propose changes without modifying calendar
+        delegation_depth = state.get("delegation_depth") or "assisted"
+        if delegation_depth == "advisory":
+            pending = []
+            for task in proposed:
+                if task.get("action") == "move":
+                    pending.append({
+                        "task_name": task.get("task_name", ""),
+                        "action": "move",
+                        "old_time": task.get("old_time", ""),
+                        "suggested_time": task.get("suggested_time", ""),
+                        "reason": task.get("reason", ""),
+                    })
+            state["pending_proposals"] = pending
+            state["awaiting_confirmation"] = True
+            state["confirmed_schedule"] = []
+            state["moved_meetings"] = []
+            state["confidence_scores"] = {}
+            state["schedule_conflict"] = False
+            return state
+
         tasks_to_move = [t for t in proposed if t.get("action") == "move"]
         if not tasks_to_move:
             state["confirmed_schedule"] = []

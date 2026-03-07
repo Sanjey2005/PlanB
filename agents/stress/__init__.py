@@ -68,6 +68,18 @@ def stress_agent(state: PlanBState) -> PlanBState:
         state["proposed_schedule"] = kept_schedule
         print(f"[Stress] Lightened {len(lightened_events)} tasks, kept {len(kept_schedule)}.")
 
+        # Advisory guard — propose stress actions without executing them
+        delegation_depth = state.get("delegation_depth") or "assisted"
+        if delegation_depth == "advisory":
+            state["pending_proposals"] = [
+                {"action": "lighten", "task_name": e.get("summary", "Unknown"),
+                 "reason": f"Low priority ({task_scores.get(e.get('id', ''), '?')}) — would be lightened for stress relief"}
+                for e in lightened_events
+            ]
+            state["awaiting_confirmation"] = True
+            state["stress_actions"] = []
+            return state
+
         # STEP 2 — Set fatigue_level to high so downstream agents adapt
         state["fatigue_level"] = "high"
         stress_actions.append({

@@ -31,6 +31,7 @@ _DEFAULT_DNA: dict = {
     "learned_overrides": {},
     "crisis_contacts": [],
     "streak_records": {},
+    "day_of_week_patterns": {},
     "total_pipeline_runs": 0,
     "last_updated": "",
 }
@@ -64,6 +65,7 @@ def get_user_dna(user_phone: str) -> dict:
     dna["avg_fatigue_pattern"] = dict(_DEFAULT_DNA["avg_fatigue_pattern"])
     dna["learned_overrides"] = dict(_DEFAULT_DNA["learned_overrides"])
     dna["streak_records"] = dict(_DEFAULT_DNA["streak_records"])
+    dna["day_of_week_patterns"] = dict(_DEFAULT_DNA["day_of_week_patterns"])
 
     if not user_phone:
         return dna
@@ -174,6 +176,15 @@ def update_user_dna(user_phone: str, state: dict) -> None:
                 prev["drop_count"] = max(prev.get("drop_count", 0), drop_count)
                 prev["kept_streak"] = 0
             dna["streak_records"][task_name] = prev
+
+        # ── day_of_week_patterns ─────────────────────────────────────────
+        try:
+            from utils.habit_learner import get_day_of_week_patterns
+            dow_patterns = get_day_of_week_patterns(user_phone)
+            if dow_patterns:
+                dna["day_of_week_patterns"] = dow_patterns
+        except Exception as e:
+            print(f"[UserDNA] day-of-week pattern detection failed: {e}")
 
         # ── last_fatigue ─────────────────────────────────────────────────────
         fatigue_level = state.get("fatigue_level")

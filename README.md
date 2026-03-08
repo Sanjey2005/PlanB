@@ -1,7 +1,5 @@
 # PlanB — WhatsApp AI Scheduling Assistant
 
-> Built for NeoVerse 26 Hackathon
-
 PlanB is an autonomous AI scheduling assistant that operates entirely through WhatsApp. When disruptions hit — a cancelled meeting, a traffic jam, an urgent email — PlanB detects them, re-evaluates your entire day, reschedules meetings via Google Calendar, drafts rescheduling emails via AWS SES, and sends you a plain-text WhatsApp summary. No app to open. No manual rescheduling.
 
 ---
